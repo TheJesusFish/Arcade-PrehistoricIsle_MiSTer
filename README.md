@@ -7,22 +7,61 @@ The intent is for this core to be a 1:1 playable implementation of Prehistoric I
 
 <img width="" height="" src="https://github.com/va7deo/PrehistoricIsle/assets/32810066/f206a42f-416a-455d-8359-8d2549b0ed8a">
 
+## PrehistoricIsleMD
+
+This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRAs `... [MD].mra` with `<rbf>PrehistoricIsleMD</rbf>`). The emulation is unchanged: CPU, interrupt, video and sound timing and output are those of the previous release. The changes:
+
+- Framework updated to the current [**Template_MiSTer**](https://github.com/MiSTer-devel/Template_MiSTer) (`sys/`, Template project layout, HDMI PLL output on counter C5 per Template_MiSTer issue #112).
+- CPU and sound modules re-imported from their original repositories at the commits the previous release used (table below).
+- JTFRAME removed; the audio mixer is native code with the same output.
+- Every clock is `clk_sys` with clock enables, so the whole core is timing-constrained.
+- **Save states**: hold **L**, then **Down** saves, **Up** restores, **Left / Right** selects the slot (also Alt+F1 / F1 and the OSD).
+- **High scores** are restored from and saved to `config/nvram/<MRA name>.nvm` (entries from MAME `hiscore.dat`); saved when the OSD is opened (OSD option "Autosave Hiscores") or with "Save Hiscores".
+- **Controls**: each controller drives its own player's Start and Coin; player 2 is controller 2. "Swap P1/P2 Joystick" swaps the whole controllers.
+- **DIP switches** follow MAME (`-listxml`), except where the game's own DIP sheet differs (see below). Changing a DIP in the OSD no longer resets the game; it takes effect with "Reset to apply". DIP and high-score downloads no longer reach the ROM loader; only the ROM download does.
+- Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
+- The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
+
+Button layout (changed from the previous release, so controller maps saved for these setnames need to be redone):
+
+| Button | Default | Function |
+|---|---|---|
+| Shoot | A | PUSH 1 |
+| Option | B | PUSH 2 |
+| Start | Start | 1P / 2P Start (controller 1 / 2) |
+| Coin | Select | Coin 1 / Coin 2 (controller 1 / 2) |
+| Pause | R | Pause |
+| Save States | L | hold for save-state controls |
+
+Button names are from the control panel figure of the game's manual (`doc/Prehisle Manual.pdf`, p.3: PUSH 1 SHOOT, PUSH 2 OPTION). The game uses two buttons; the JAMMA third button input is still read from the keyboard (Space / Q) as before.
+
+DIP switches: MAME 0.288 for all sets, with these differences taken from the game itself:
+
+- **Prehistoric Isle in 1930 (US)**: Coinage as on the US manual's DIP sheet (Free Play, 1 Coin/2 Credits, 2 Coins/1 Credit, 1 Coin/1 Credit), which is how the US program decodes the switches.
+- The US manual lists Bonus Life "100000/150000"; the game's bonus table (all sets) gives 100K / 200K as MAME says, so MAME's label is kept.
+
+Note: the US set keeps a separate credit count for each side: Coin 1 (controller 1's Select, key 5) credits player 1 and Coin 2 (controller 2's Select, key 6) credits player 2.
+
+Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the unmodified jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes and the music tempo phase may shift by up to one timer tick.
+
 ## External Modules
 
-| Module                                                                             | Function                                                               | Author                                         |
-|------------------------------------------------------------------------------------|------------------------------------------------------------------------|------------------------------------------------|
-| [**fx68k**](https://github.com/ijor/fx68k)                                         | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | Jorge Cwik                                     |
-| [**t80**](https://opencores.org/projects/t80)                                      | [**Zilog Z80 CPU**](https://en.wikipedia.org/wiki/Zilog_Z80)           | Daniel Wallner                                 |
-| [**jtopl2**](https://github.com/jotego/jtopl)                                      | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2)      | Jose Tejada                                    |
-| [**jt7759**](https://github.com/jotego/jt7759)                                     | [**NEC µPD7759**](https://github.com/jotego/jt7759)                    | Jose Tejada                                    |
-| [**yc_out**](https://github.com/MikeS11/MiSTerFPGA_YC_Encoder)                     | [**Y/C Video Module**](https://en.wikipedia.org/wiki/S-Video)          | Mike Simone                                    |
-| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader                                      | Josh Bassett, modified by Erin Olafson       |
-| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer)               | MiSTer Framework Template                                              | sorgelig, modified by Erin Olafson / atrac17 |
+| Module | Function | Source (commit) | Author |
+|---|---|---|---|
+| [**fx68k**](https://github.com/ijor/fx68k) | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | ijor/fx68k @ 0602ee4 | Jorge Cwik |
+| [**T80**](https://github.com/MiSTer-devel/NeoGeo_MiSTer/tree/master/rtl/cpu/T80) | [**Zilog Z80 CPU**](https://en.wikipedia.org/wiki/Zilog_Z80) | MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350 | Daniel Wallner, MiSTer changes by Sorgelig |
+| [**jtopl2**](https://github.com/jotego/jtopl) | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2) | jotego/jtopl @ d3e73f1 | Jose Tejada |
+| [**jt7759**](https://github.com/jotego/jt7759) | [**NEC µPD7759**](https://github.com/jotego/jt7759) | jotego/jt7759 @ c23dc9f | Jose Tejada |
+| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Arcade-Rygar_MiSTer src/mem | Josh Bassett, modified by Erin Olafson |
+| [**pause**](https://github.com/JimmyStones/Pause_MiSTer) | Pause handling | Pause_MiSTer v0002 | Jim Gregory |
+| [**save states**](https://github.com/MiSTer-devel/Arcade-TaitoF2_MiSTer) | Save-state stream, DDR3 interface, save-state UI (`rtl/savestate/`) | Arcade-TaitoF2_MiSTer @ 9438df9 | Martin Donlon |
+| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer) | MiSTer Framework Template | Template_MiSTer @ d6324f2 | sorgelig and contributors |
+
+The save-state sequencer and the high-score module of this core are modelled on Arcade-TaitoF2_MiSTer (save states) and Arcade-RaizingMD_MiSTer / Arcade-IGSPGM_MiSTer (NVRAM high scores).
 
 # Known Issues / Tasks
 
 - [**OPL2 Audio**](https://github.com/jotego/jtopl/issues/11)  **[Issue]**  
-- Timing issues with jtframe_mixer module; false paths added to sdc (may need refactor?)  **[Task]**  
 
 # PCB Check List
 

@@ -1,0 +1,2213 @@
+//============================================================================
+//
+//  This program is free software; you can redistribute it and/or modify it
+//  under the terms of the GNU General Public License as published by the Free
+//  Software Foundation; either version 2 of the License, or (at your option)
+//  any later version.
+//
+//  This program is distributed in the hope that it will be useful, but WITHOUT
+//  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+//  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+//  more details.
+//
+//  You should have received a copy of the GNU General Public License along
+//  with this program; if not, write to the Free Software Foundation, Inc.,
+//  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+//
+//============================================================================
+
+`default_nettype none
+
+module emu
+(
+	`include "sys/emu_ports.vh"
+);
+
+///////// Default values for ports not used in this core /////////
+
+assign ADC_BUS  = 'Z;
+assign USER_OUT = '1;
+assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
+//assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
+//assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+assign VGA_F1 = 0;
+assign VGA_SCALER = 0;
+assign VGA_DISABLE = 0;
+assign HDMI_FREEZE = 0;
+assign HDMI_BLACKOUT = 0;
+assign HDMI_BOB_DEINT = 0;
+assign FB_FORCE_BLANK = 0;
+
+assign AUDIO_MIX = 0;
+assign LED_USER = sprite_ram_dout;
+assign LED_DISK = 0;
+assign LED_POWER = 0;
+assign BUTTONS = 0;
+
+assign m68k_a[0] = 0;
+
+// Status Bit Map:
+//              Upper Case                     Lower Case           
+// 0         1         2         3          4         5         6   
+// 01234567890123456789012345678901 23456789012345678901234567890123
+// 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
+// X  XXXXXXXXX XX    X X XXXXXXXX        XXXX XXXX         XXXXXXXX
+
+wire [1:0] aspect_ratio = status[9:8];
+wire       orientation  = ~status[3];
+wire [2:0] scan_lines   = status[6:4];
+reg        refresh_mod;
+reg        new_vmode;
+
+always @(posedge clk_sys) begin
+    if (refresh_mod != ~status[19]) begin
+        refresh_mod <= ~status[19];
+        new_vmode <= ~new_vmode;
+    end
+end
+
+wire [3:0] hs_offset = status[27:24];
+wire [3:0] vs_offset = status[31:28];
+wire [3:0] hs_width  = status[59:56];
+wire [3:0] vs_width  = status[63:60];
+
+assign VIDEO_ARX = (!aspect_ratio) ? (orientation  ? 8'd8 : 8'd7) : (aspect_ratio - 1'd1);
+assign VIDEO_ARY = (!aspect_ratio) ? (orientation  ? 8'd7 : 8'd8) : 12'd0;
+
+wire gfx_tx_en = ~(status[37]);
+wire gfx_fg_en = ~(status[38]);
+wire gfx_bg_en = ~(status[39]);
+wire gfx_sp_en = ~(status[40]);
+
+`include "build_id.v" 
+localparam CONF_STR = {
+    "Prehistoric Isle in 1930;SS3E000000:400000;",
+    "-;",
+    "P1,Video Settings;",
+    "P1-;",
+    "P1O89,Aspect Ratio,Original,Full Screen,[ARC1],[ARC2];",
+    "P1O3,Orientation,Horz,Vert;",
+    "P1-;",
+    "P1O46,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%,CRT 100%;",
+    "P1OA,Force Scandoubler,Off,On;",
+    "P1-;",
+    "P1OJ,Refresh Rate,Native,NTSC;",
+    "P1-;",
+    "P1OOR,H-sync Pos Adj,0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,-1;",
+    "P1OSV,V-sync Pos Adj,0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,-1;",
+    "P1-;",
+    "P1oOR,H-sync Width Adj,0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,-1;",
+    "P1oSV,V-sync Width Adj,0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,-1;",
+    "P1-;",
+    "P2,Audio Settings;",
+    "P2-;",
+    "P2oDE,ADPCM Volume,Default,37.5%,25%,Off;",
+    "P2oBC,OPL2 Volume,Default,50%,25%,Off;",
+    "P2-;",
+    "-;",
+    "P3,Core Options;",
+    "P3-;",
+    "P3o9,Swap P1/P2 Joystick,Off,On;",
+    "P3-;",
+    "P3OF,68k Freq.,9Mhz,12MHz;",
+    "P3-;",
+    "P3o6,Foreground Layer,On,Off;",
+    "P3o7,Background Layer,On,Off;",
+    "P3o8,Sprite Layer,On,Off;",
+    "P3o5,Text Layer,On,Off;",
+    "P3-;",
+    "DIP;",
+    "-;",
+    "O[65:64],Savestate Slot,1,2,3,4;",
+    "O[66],Autoincrement Slot,Off,On;",
+    "R[67],Save state (Alt-F1);",
+    "R[68],Restore state (F1);",
+    "-;",
+    "h1O[69],Autosave Hiscores,On,Off;",
+    "h1T[70],Save Hiscores;",
+    "h1-;",
+    "OK,Pause OSD,Off,When Open;",
+    "OL,Dim Video,Off,10s;",
+    "-;",
+    "R0,Reset;",
+    "I,",
+    "L+Up=Restore|L+Down=Save|L+Left/Right=Slot,",
+    "Active Slot 1,",
+    "Active Slot 2,",
+    "Active Slot 3,",
+    "Active Slot 4,",
+    "Save to state 1,",
+    "Restore state 1,",
+    "Save to state 2,",
+    "Restore state 2,",
+    "Save to state 3,",
+    "Restore state 3,",
+    "Save to state 4,",
+    "Restore state 4;",
+    "V,v",`BUILD_DATE
+};
+
+wire hps_forced_scandoubler;
+wire forced_scandoubler = hps_forced_scandoubler | status[10];
+
+wire  [1:0] buttons;
+wire [127:0] status;
+wire [10:0] ps2_key;
+wire [31:0] joy0_full, joy1_full;
+wire [15:0] joy0 = joy0_full[15:0];
+wire [15:0] joy1 = joy1_full[15:0];
+
+hps_io #(.CONF_STR(CONF_STR)) hps_io
+(
+    .clk_sys(clk_sys),
+    .HPS_BUS(HPS_BUS),
+
+    .buttons(buttons),
+    .ps2_key(ps2_key),
+    .status(status),
+    .status_in(status_in),
+    .status_set(ss_status_set),
+    .status_menumask({14'd0, hs_has_entries, direct_video}),
+    .info_req(ss_info_req),
+    .info(ss_info),
+    .forced_scandoubler(hps_forced_scandoubler),
+    .gamma_bus(gamma_bus),
+    .new_vmode(new_vmode),
+    .direct_video(direct_video),
+    .video_rotated(video_rotated),
+
+    .ioctl_download(ioctl_download),
+    .ioctl_upload(ioctl_upload),
+    .ioctl_upload_req(hs_upload_req),
+    .ioctl_upload_index(8'd4),
+    .ioctl_wr(ioctl_wr),
+    .ioctl_addr(ioctl_addr),
+    .ioctl_dout(ioctl_dout),
+    .ioctl_din(ioctl_din),
+    .ioctl_index(ioctl_index),
+    .ioctl_wait(ioctl_wait),
+
+    .joystick_0(joy0_full),
+    .joystick_1(joy1_full)
+);
+
+// INPUT
+
+// 8 dip switches of 8 bits
+reg [7:0] sw[8];
+always @(posedge clk_sys) begin
+    if (ioctl_wr && (ioctl_index==254) && !ioctl_addr[24:3]) begin
+        sw[ioctl_addr[2:0]] <= ioctl_dout;
+    end
+end
+
+// DIP switches seen by the game, taken while the core is in reset
+reg [7:0] sw0_l, sw1_l;
+always @(posedge clk_sys) begin
+    if (reset) begin
+        sw0_l <= sw[0];
+        sw1_l <= sw[1];
+    end
+end
+
+wire        direct_video;
+
+wire        ioctl_download;
+wire        ioctl_upload;
+wire        ioctl_wait = 1'b0;
+wire        ioctl_wr;
+wire [15:0] ioctl_index;
+wire [26:0] ioctl_addr;
+wire  [7:0] ioctl_dout;
+wire  [7:0] ioctl_din;
+wire        rom_download = ioctl_download && (ioctl_index == 16'd0);
+
+// save-state slot shown in the OSD
+wire  [1:0] ss_slot;
+wire        ss_status_set;
+wire        ss_info_req;
+wire  [7:0] ss_info;
+wire [127:0] status_in = { status[127:66], ss_slot, status[63:0] };
+
+wire [21:0] gamma_bus;
+
+// Inputs use inversion as a form of protection
+reg [15:0] p1;
+reg [15:0] p2;
+reg [15:0] dsw1;
+reg [15:0] dsw2;
+reg [15:0] coin;
+reg p1_invert;
+
+always @ (posedge clk_sys ) begin
+    p1 <= 16'hffff;
+    p1[7:0] <= { 8 {p1_invert} } ^ ~{ start1, p1_buttons[2:0], p1_right, p1_left , p1_down, p1_up};
+    p2 <= 16'hffff;
+    p2[7:0] <= ~{ start2, p2_buttons[2:0], p2_right, p2_left ,p2_down, p2_up};
+    dsw1 <=  { 8'hff, sw0_l };
+    dsw2 <=  { 8'hff, ~vbl, sw1_l[6:0] };
+    coin <=  ~ { 11'h000, key_tilt, key_test, key_service, coin_b, coin_a };
+end
+
+reg        p1_swap;
+
+reg        p1_right;
+reg        p1_left;
+reg        p1_down;
+reg        p1_up;
+reg [2:0]  p1_buttons;
+
+reg        p2_right;
+reg        p2_left;
+reg        p2_down;
+reg        p2_up;
+reg [2:0]  p2_buttons;
+
+reg start1;
+reg start2;
+reg coin_a;
+reg coin_b;
+reg b_pause;
+reg service;
+
+// pad bits: 0 right, 1 left, 2 down, 3 up, 4 shoot, 5 option, 6 start, 7 coin, 8 pause, 9 save states
+localparam BTN_SHOOT = 4, BTN_OPTION = 5, BTN_START = 6, BTN_COIN = 7, BTN_PAUSE = 8, BTN_SS = 9;
+
+// game inputs of a pad, masked while its save-state button is held
+wire [7:0] pad0 = joy0[BTN_SS] ? 8'd0 : joy0[7:0];
+wire [7:0] pad1 = joy1[BTN_SS] ? 8'd0 : joy1[7:0];
+
+// player 1 and player 2 pads (swapped by the OSD option)
+wire [7:0] pad_p1 = status[41] ? pad1 : pad0;
+wire [7:0] pad_p2 = status[41] ? pad0 : pad1;
+
+always @ * begin
+    p1_swap <= status[41];
+
+        if ( status[41] == 0 ) begin
+        p1_right   <= pad_p1[0] | key_p1_right;
+        p1_left    <= pad_p1[1] | key_p1_left;
+        p1_down    <= pad_p1[2] | key_p1_down;
+        p1_up      <= pad_p1[3] | key_p1_up;
+        p1_buttons <= { key_p1_c, pad_p1[BTN_OPTION] | key_p1_b, pad_p1[BTN_SHOOT] | key_p1_a };
+
+        p2_right   <= pad_p2[0] | key_p2_right;
+        p2_left    <= pad_p2[1] | key_p2_left;
+        p2_down    <= pad_p2[2] | key_p2_down;
+        p2_up      <= pad_p2[3] | key_p2_up;
+        p2_buttons <= { key_p2_c, pad_p2[BTN_OPTION] | key_p2_b, pad_p2[BTN_SHOOT] | key_p2_a };
+    end else begin
+        p2_right   <= pad_p2[0] | key_p1_right;
+        p2_left    <= pad_p2[1] | key_p1_left;
+        p2_down    <= pad_p2[2] | key_p1_down;
+        p2_up      <= pad_p2[3] | key_p1_up;
+        p2_buttons <= { key_p1_c, pad_p2[BTN_OPTION] | key_p1_b, pad_p2[BTN_SHOOT] | key_p1_a };
+
+        p1_right   <= pad_p1[0] | key_p2_right;
+        p1_left    <= pad_p1[1] | key_p2_left;
+        p1_down    <= pad_p1[2] | key_p2_down;
+        p1_up      <= pad_p1[3] | key_p2_up;
+        p1_buttons <= { key_p2_c, pad_p1[BTN_OPTION] | key_p2_b, pad_p1[BTN_SHOOT] | key_p2_a };
+    end
+end
+
+always @ * begin
+        start1    <= pad_p1[BTN_START] | key_start_1p;
+        start2    <= pad_p2[BTN_START] | key_start_2p;
+
+        coin_a    <= pad_p1[BTN_COIN]  | key_coin_a;
+        coin_b    <= pad_p2[BTN_COIN]  | key_coin_b;
+
+        b_pause   <= joy0[BTN_PAUSE] | joy1[BTN_PAUSE] | key_pause;
+        service   <= key_test;
+end
+
+// Keyboard handler
+
+reg key_start_1p, key_start_2p, key_coin_a, key_coin_b;
+reg key_tilt, key_test, key_reset, key_service, key_pause;
+
+reg key_p1_up, key_p1_left, key_p1_down, key_p1_right, key_p1_a, key_p1_b, key_p1_c;
+reg key_p2_up, key_p2_left, key_p2_down, key_p2_right, key_p2_a, key_p2_b, key_p2_c;
+
+wire pressed = ps2_key[9];
+
+always @(posedge clk_sys) begin
+    reg old_state;
+    old_state <= ps2_key[10];
+    if ( old_state ^ ps2_key[10] ) begin
+        casex ( ps2_key[8:0] )
+            'h016 :  key_start_1p   <= pressed;            // 1
+            'h01E :  key_start_2p   <= pressed;            // 2
+            'h02E :  key_coin_a     <= pressed;            // 5
+            'h036 :  key_coin_b     <= pressed;            // 6
+            'h006 :  key_test       <= key_test ^ pressed; // f2
+            'h004 :  key_reset      <= pressed;            // f3
+            'h046 :  key_service    <= pressed;            // 9
+            'h02C :  key_tilt       <= pressed;            // t
+            'h04D :  key_pause      <= pressed;            // p
+
+            'h175 :  key_p1_up      <= pressed;            // up
+            'h172 :  key_p1_down    <= pressed;            // down
+            'h16B :  key_p1_left    <= pressed;            // left
+            'h174 :  key_p1_right   <= pressed;            // right
+            'h014 :  key_p1_a       <= pressed;            // lctrl
+            'h011 :  key_p1_b       <= pressed;            // lalt
+            'h029 :  key_p1_c       <= pressed;            // spacebar
+
+            'h02D :  key_p2_up      <= pressed;            // r
+            'h02B :  key_p2_down    <= pressed;            // f
+            'h023 :  key_p2_left    <= pressed;            // d
+            'h034 :  key_p2_right   <= pressed;            // g
+            'h01C :  key_p2_a       <= pressed;            // a
+            'h01B :  key_p2_b       <= pressed;            // s
+            'h015 :  key_p2_c       <= pressed;            // q
+        endcase
+    end
+end
+
+reg user_flip;
+
+wire pll_locked;
+
+wire clk_sys;
+wire turbo_68k = status[15];
+reg  clk_4M, clk_6M, clk_18M, clk_640k;
+
+wire clk_72M;
+
+pll pll
+(
+    .refclk(CLK_50M),
+    .rst(0),
+    .outclk_0(clk_sys),
+    .outclk_1(clk_72M),
+    .locked(pll_locked)
+);
+
+assign    SDRAM_CLK = clk_72M;
+
+localparam  CLKSYS=72;
+
+reg  [5:0]  clk18_count;
+reg  [5:0]  clk6_count;
+reg  [5:0]  clk4_count;
+reg  [15:0] clk_640k_count;
+
+localparam M = 2;
+localparam N = 225;
+
+// next value of clk_18M: high at counts 0, 1, 3 (9 MHz 68k) or at count 1 (12 MHz 68k)
+wire clk_18M_next = turbo_68k ? ( clk18_count == 1 ) : ( clk18_count == 0 || clk18_count == 1 || clk18_count == 3 );
+
+// clock enables at the rising edges of clk_18M, clk_6M and clk_4M
+wire cen_18M = ~clk_18M & clk_18M_next;
+wire cen_6M  = ~clk_6M  & ( clk6_count == 0 );
+wire cen_4M  = ~clk_4M  & ( clk4_count == 0 );
+
+// 68000 and Z80 clock counters run unless paused; during a save state the sequencer decides
+wire run68  = ss_busy ? ss_cpu_run : ~pause_cpu;
+wire runz80 = ss_busy ? ss_z80_run : ~pause_cpu;
+
+always @ (posedge clk_sys) begin
+    clk_18M <= clk_18M_next;
+    if ( turbo_68k == 0 ) begin
+        // standard speed 18MHz = 9MHz 68k
+    if ( clk18_count == 3 ) begin
+        clk18_count <= 0;
+    end else if ( run68 ) begin
+        clk18_count <= clk18_count + 1;
+    end
+    end else begin
+        // standard speed 24MHz = 12MHz 68k
+        if ( clk18_count == 2 ) begin
+            clk18_count <= 0;
+        end else if ( run68 ) begin
+            clk18_count <= clk18_count + 1;
+        end
+    end
+    clk_6M <= ( clk6_count == 0 );
+    if ( clk6_count == 11 ) begin
+        clk6_count <= 0;
+    end else begin
+        clk6_count <= clk6_count + 1;
+    end
+    clk_4M <= ( clk4_count == 0 );
+    if ( ss_c4_load ) begin
+        clk4_count <= ss_c4_val;
+    end else if ( clk4_count == 17 ) begin
+        clk4_count <= 0;
+    end else if ( runz80 ) begin
+        clk4_count <= clk4_count + 1;
+    end
+// M = 2 / N = 225
+    clk_640k <= 0;
+    if ( clk_640k_count > (N-1) ) begin
+        clk_640k <= 1;
+        clk_640k_count <= clk_640k_count - (N-M-1);
+    end else begin
+        clk_640k_count <= clk_640k_count + M;
+    end
+end
+
+// RESET synchronised to clk_sys
+reg [1:0] reset_sync = 2'b11;
+always @(posedge clk_sys) reset_sync <= { reset_sync[0], RESET };
+
+wire reset;
+assign reset = reset_sync[1] | key_reset | status[0];
+
+//////////////////////////////////////////////////////////////////
+wire rotate_ccw = 1;
+wire no_rotate = orientation | direct_video;
+wire video_rotated;
+wire flip = 0;
+
+reg [23:0] rgb;
+
+wire hbl;
+wire vbl;
+
+wire [8:0] hc;
+wire [8:0] vc;
+
+wire hsync;
+wire vsync;
+
+reg hbl_delay, vbl_delay;
+
+always @ ( posedge clk_sys ) begin
+    if ( cen_6M ) begin
+        hbl_delay <= hbl;
+        vbl_delay <= vbl;
+    end
+end
+
+video_timing video_timing (
+    .clk(clk_sys),
+    .clk_pix(cen_6M),
+    .reset(reset),
+    .hs_offset(hs_offset),
+    .vs_offset(vs_offset),
+    .hs_width(hs_width),
+    .vs_width(vs_width),
+    .refresh_mod(refresh_mod),
+    .hc(hc),
+    .vc(vc),
+    .hbl(hbl),
+    .vbl(vbl),
+    .hsync(hsync),
+    .vsync(vsync)
+    );
+
+// PAUSE SYSTEM
+wire    pause_cpu;
+wire    hs_pause;
+
+// 8 bits per colour, 72MHz sys clk
+pause #(8,8,8,72) pause
+(
+    .clk_sys(clk_sys),
+    .reset(reset),
+    .user_button(b_pause),
+    .pause_request(hs_pause),
+    .options(status[21:20]),
+    .pause_cpu(pause_cpu),
+    .dim_video(dim_video),
+    .OSD_STATUS(OSD_STATUS),
+    .r(rgb[23:16]),
+    .g(rgb[15:8]),
+    .b(rgb[7:0]),
+    .rgb_out(rgb_pause_out)
+);
+
+wire [23:0] rgb_pause_out;
+wire dim_video;
+
+arcade_video #(256,24) arcade_video
+(
+        .*,
+
+        .clk_video(clk_sys),
+        .ce_pix(clk_6M),
+
+        .RGB_in(rgb_pause_out),
+
+        .HBlank(hbl_delay),
+        .VBlank(vbl_delay),
+        .HSync(hsync),
+        .VSync(vsync),
+
+        .fx(scan_lines)
+);
+
+// DDR3: save states while they hold it, screen rotation otherwise
+ddr_if ddr_host(), ddr_ss(), ddr_rot();
+
+wire        rot_ddram_clk, rot_ddram_we, rot_ddram_rd;
+wire  [7:0] rot_ddram_burstcnt, rot_ddram_be;
+wire [28:0] rot_ddram_addr;
+wire [63:0] rot_ddram_din;
+
+screen_rotate screen_rotate (
+    .CLK_VIDEO, .CE_PIXEL, .VGA_R, .VGA_G, .VGA_B, .VGA_HS, .VGA_VS, .VGA_DE,
+    .rotate_ccw, .no_rotate, .flip, .video_rotated,
+    .FB_EN, .FB_FORMAT, .FB_WIDTH, .FB_HEIGHT, .FB_BASE, .FB_STRIDE, .FB_VBL, .FB_LL,
+    .DDRAM_CLK(rot_ddram_clk), .DDRAM_BUSY(ddr_rot.busy), .DDRAM_BURSTCNT(rot_ddram_burstcnt), .DDRAM_ADDR(rot_ddram_addr),
+    .DDRAM_DIN(rot_ddram_din), .DDRAM_BE(rot_ddram_be), .DDRAM_WE(rot_ddram_we), .DDRAM_RD(rot_ddram_rd)
+);
+
+assign ddr_rot.acquire    = ~ddr_ss.acquire;
+assign ddr_rot.addr       = { rot_ddram_addr, 3'b000 };
+assign ddr_rot.wdata      = rot_ddram_din;
+assign ddr_rot.byteenable = rot_ddram_be;
+assign ddr_rot.burstcnt   = rot_ddram_burstcnt;
+assign ddr_rot.write      = rot_ddram_we;
+assign ddr_rot.read       = rot_ddram_rd;
+
+ddr_mux ddr_mux (
+    .clk(clk_sys),
+    .x(ddr_host),
+    .a(ddr_ss),
+    .b(ddr_rot)
+);
+
+assign DDRAM_CLK      = clk_sys;
+assign DDRAM_ADDR     = ddr_host.addr[31:3];
+assign DDRAM_BE       = ddr_host.byteenable;
+assign DDRAM_WE       = ddr_host.write;
+assign DDRAM_RD       = ddr_host.read;
+assign DDRAM_DIN      = ddr_host.wdata;
+assign DDRAM_BURSTCNT = ddr_host.burstcnt;
+assign ddr_host.rdata       = DDRAM_DOUT;
+assign ddr_host.rdata_ready = DDRAM_DOUT_READY;
+assign ddr_host.busy        = DDRAM_BUSY;
+
+reg [3:0] txt_pix;
+reg [3:0] bg_pix;
+
+reg [7:0] hc_del;
+
+reg [4:0] tile_state;
+reg [4:0] sprite_state;
+reg [8:0] sprite_num;
+
+reg   [2:0] pri_buf[0:255];
+
+reg  [31:0] pix_data;
+reg  [31:0] spr_pix_data;
+
+reg  [8:0] x;
+wire [8:0] tx_x = x;
+wire [8:0] tx_y = ( flip_screen == 0 ) ? vc : ~vc;
+wire [8:0] sp_y = ( flip_screen == 0 ) ? vc : 255 - vc;
+
+wire [13:0] fg_x = x  + fg_scroll_x;
+wire  [8:0] fg_y = ( flip_screen == 0 ) ? ( vc + fg_scroll_y ) : ( 255 - vc ) + fg_scroll_y;
+
+wire [13:0] bg_x = x  + bg_scroll_x;
+wire  [8:0] bg_y = ( flip_screen == 0 ) ? ( vc + bg_scroll_y ) : ( 255 - vc ) + bg_scroll_y ;
+
+wire  [9:0] txt_tile = { vc[7:3], hc[7:3] };
+
+wire [14:0] fg_tile  = { fg_x[11:4], fg_y[8:4] };
+wire [14:0] bg_tile  = { bg_x[13:4], bg_y[8:4] };
+
+reg [3:0] sprite_colour;
+
+always @ (posedge clk_sys) begin
+    if ( reset == 1 ) begin
+        tile_state <= 0;
+    end else begin
+        // tiles
+        if ( tile_state == 0 && hc == 0 ) begin
+            tile_state <= 1;
+            x <= 0;
+        end else if ( tile_state == 1) begin
+            line_buf_tx_w <= 0;
+            txt_ram_addr <= { tx_y[7:3], tx_x[7:3] };
+            tile_state <= 2;
+        end else if ( tile_state == 2) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 3;
+        end else if ( tile_state == 3) begin
+            txt_rom_addr <= { txt_ram_dout[11:0], tx_y[2:0] };
+            txt_rom_cs <= 1;
+            tile_state <= 4;
+        end else if ( tile_state == 4) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 5;
+        end else if ( tile_state == 5) begin
+            if ( txt_rom_valid == 1 ) begin
+                txt_rom_cs <= 0;
+                pix_data <= txt_rom_data;
+                tile_state <= 6;
+            end
+        end else if ( tile_state == 6) begin
+//            pri_buf[x] <= 1;
+            line_buf_addr_w <= { vc[0], x[8:0] };
+            line_buf_tx_w <= 1;
+            case ( x[2:0] )
+                0: line_buf_din <= { txt_ram_dout[15:12], pix_data[31:28] };
+                1: line_buf_din <= { txt_ram_dout[15:12], pix_data[27:24] };
+                2: line_buf_din <= { txt_ram_dout[15:12], pix_data[23:20] };
+                3: line_buf_din <= { txt_ram_dout[15:12], pix_data[19:16] };
+                4: line_buf_din <= { txt_ram_dout[15:12], pix_data[15:12] };
+                5: line_buf_din <= { txt_ram_dout[15:12], pix_data[11:8] };
+                6: line_buf_din <= { txt_ram_dout[15:12], pix_data[7:4] };
+                7: line_buf_din <= { txt_ram_dout[15:12], pix_data[3:0] };
+            endcase
+            if ( x < 256 ) begin
+                if ( x[2:0] == 3'b111 ) begin
+                    tile_state <= 1;
+                end
+                x <= x + 1;
+            end else begin
+                tile_state <= 7;
+                line_buf_tx_w <= 0;
+            end
+        end else if ( tile_state == 7) begin
+            x <= 0;
+            tile_state <= 11;
+        // fg
+        end else if ( tile_state == 11) begin
+            line_buf_fg_w <= 0;
+            fg_ram_addr <= fg_tile;
+            tile_state <= 12;
+        end else if ( tile_state == 12) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 13;
+        end else if ( tile_state == 13) begin
+            fg_rom_addr <= { fg_ram_dout[10:0], fg_x[3], { 4 { fg_ram_dout[11] } } ^ fg_y[3:0] };
+            fg_rom_cs <= 1;
+            tile_state <= 14;
+        end else if ( tile_state == 14) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 15;
+        end else if ( tile_state == 15) begin
+            if ( fg_rom_valid == 1 ) begin
+                fg_rom_cs <= 0;
+                pix_data <= fg_rom_data;
+                tile_state <= 16;
+            end
+        end else if ( tile_state == 16) begin
+            line_buf_addr_w <= { vc[0], x[8:0] };
+            line_buf_fg_w <= 1;
+            case ( fg_x[2:0] ) // case ( x[2:0] )
+                0: line_buf_din <= { fg_ram_dout[15:12], pix_data[31:28] };
+                1: line_buf_din <= { fg_ram_dout[15:12], pix_data[27:24] };
+                2: line_buf_din <= { fg_ram_dout[15:12], pix_data[23:20] };
+                3: line_buf_din <= { fg_ram_dout[15:12], pix_data[19:16] };
+                4: line_buf_din <= { fg_ram_dout[15:12], pix_data[15:12] };
+                5: line_buf_din <= { fg_ram_dout[15:12], pix_data[11:8] };
+                6: line_buf_din <= { fg_ram_dout[15:12], pix_data[7:4] };
+                7: line_buf_din <= { fg_ram_dout[15:12], pix_data[3:0] };
+            endcase
+            if ( x < 256 ) begin
+                if ( fg_x[2:0] == 3'b111 ) begin // if ( x[2:0] == 3'b111 ) begin
+                    tile_state <= 11;
+                end
+                x <= x + 1;
+            end else begin
+                tile_state <= 17;
+                line_buf_fg_w <= 0;
+            end
+        end else if ( tile_state == 17) begin
+            tile_state <= 21;
+            x <= 0;
+        // bg
+        end else if ( tile_state == 21) begin
+            line_buf_bg_w <= 0;
+            tilemap_rom_addr <= bg_tile;
+            tile_state <= 22;
+        end else if ( tile_state == 22) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 23;
+        end else if ( tile_state == 23) begin
+            bg_rom_addr <= { tilemap_rom_data[10:0], tilemap_rom_data[11] ^ bg_x[3], bg_y[3:0] };
+            bg_rom_cs <= 1;
+            tile_state <= 24;
+        end else if ( tile_state == 24) begin
+            // address is valid - need more more cycle to read
+            tile_state <= 25;
+        end else if ( tile_state == 25) begin
+            if ( bg_rom_valid == 1 ) begin
+                bg_rom_cs <= 0;
+                pix_data <= bg_rom_data;
+                tile_state <= 26;
+            end
+        end else if ( tile_state == 26) begin
+            line_buf_addr_w <= { vc[0], x[8:0] };
+            line_buf_bg_w <= 1;
+            case ( { 3 { tilemap_rom_data[11] } } ^ bg_x[2:0] ) // case ( x[2:0] )
+                0: line_buf_din <= { tilemap_rom_data[15:12], pix_data[31:28] };
+                1: line_buf_din <= { tilemap_rom_data[15:12], pix_data[27:24] };
+                2: line_buf_din <= { tilemap_rom_data[15:12], pix_data[23:20] };
+                3: line_buf_din <= { tilemap_rom_data[15:12], pix_data[19:16] };
+                4: line_buf_din <= { tilemap_rom_data[15:12], pix_data[15:12] };
+                5: line_buf_din <= { tilemap_rom_data[15:12], pix_data[11:8] };
+                6: line_buf_din <= { tilemap_rom_data[15:12], pix_data[7:4] };
+                7: line_buf_din <= { tilemap_rom_data[15:12], pix_data[3:0] };
+            endcase
+            if ( x < 256 ) begin
+                if ( bg_x[2:0] == 3'b111 ) begin // if ( x[2:0] == 3'b111 ) begin
+                    tile_state <= 21;
+                end
+                x <= x + 1;
+            end else begin
+                tile_state <= 27;
+                line_buf_bg_w <= 0;
+            end
+        end else if ( tile_state == 27) begin
+            tile_state <= 0;
+        end
+        // sprites
+        if ( sprite_state == 0 && hc == 0 ) begin
+            sprite_state <= 21;
+            sprite_num <= 0;
+            // setup clearing line buffer
+            spr_buf_din <= 15;
+            spr_x_pos <= 0;
+        end else if ( sprite_state == 21 ) begin
+            spr_buf_w <= 1;
+            spr_buf_addr_w <= { vc[0], spr_x_pos };
+            if ( spr_x_pos == 256 ) begin
+                spr_buf_w <= 0;
+                sprite_state <= 22;
+            end
+            spr_x_pos <= spr_x_pos + 1;
+        end else if ( sprite_state == 22 ) begin
+            sprite_state <= 1;
+        end else if ( sprite_state == 1 ) begin
+            spr_buf_w <= 0;
+            sprite_ram_addr <= { sprite_num, 2'b0 }; // y
+            sprite_state <= 2;
+        end else if ( sprite_state == 2 ) begin
+            // address valid read y
+            sprite_state <= 3;
+        end else if ( sprite_state == 3 ) begin
+            // y valid
+            if ( sp_y >= sprite_y && sp_y < ( sprite_y + 16 ) ) begin
+                spr_y_ofs <= sp_y - sprite_y;
+                // setup to read x
+                sprite_ram_addr <= sprite_ram_addr + 1;
+                sprite_state <= 4;
+            end else begin
+                sprite_state <= 31;
+            end
+        end else if ( sprite_state == 4 ) begin
+            // x address valid 
+            sprite_state <= 5;
+        end else if ( sprite_state == 5 ) begin
+            // x value valid 
+            if ( sprite_ram_dout[7:0] < 8'hff ) begin
+                spr_x_ofs <= 0;
+                spr_x_pos <= sprite_ram_dout[8:0];
+                // read attribute / tile index
+                sprite_ram_addr <= sprite_ram_addr + 1;
+                sprite_state <= 6;
+            end else begin
+                sprite_state <= 31;
+            end
+        end else if ( sprite_state == 6 ) begin
+            // attribute address valid
+            sprite_state <= 7;
+        end else if ( sprite_state == 7 ) begin
+            // attribute data valid
+            spr_tile_num <= sprite_ram_dout[12:0];
+            spr_flip_x <= sprite_ram_dout[14];
+            spr_flip_y <= sprite_ram_dout[15];
+            sprite_ram_addr <= sprite_ram_addr + 1;
+            sprite_state <= 8;
+        end else if ( sprite_state == 8 ) begin
+            sprite_rom_addr <= { spr_tile_num, spr_flip_x ^ spr_x_ofs[3], { 4 {spr_flip_y} } ^ spr_y_ofs[3:0] };
+            sprite_rom_cs <= 1;
+            sprite_state <= 9;
+        end else if ( sprite_state == 9 ) begin
+            sprite_colour <= sprite_ram_dout[15:12];
+            // wait for sprite bitmap data
+            if ( sprite_rom_valid == 1 ) begin
+                sprite_rom_cs <= 0;
+                spr_pix_data <= sprite_rom_data;
+                sprite_state <= 10;
+            end
+        end else if ( sprite_state == 10 ) begin
+            spr_buf_addr_w <= { vc[0], spr_x_pos };
+            case ( { 3 { spr_flip_x } } ^ spr_x_ofs[2:0] ) // case ( x[2:0] )
+                0: spr_buf_din <= { sprite_colour, spr_pix_data[31:28] };
+                1: spr_buf_din <= { sprite_colour, spr_pix_data[27:24] };
+                2: spr_buf_din <= { sprite_colour, spr_pix_data[23:20] };
+                3: spr_buf_din <= { sprite_colour, spr_pix_data[19:16] };
+                4: spr_buf_din <= { sprite_colour, spr_pix_data[15:12] };
+                5: spr_buf_din <= { sprite_colour, spr_pix_data[11:8] };
+                6: spr_buf_din <= { sprite_colour, spr_pix_data[7:4] };
+                7: spr_buf_din <= { sprite_colour, spr_pix_data[3:0] };
+            endcase
+            sprite_state <= 16;
+        end else if ( sprite_state == 16 ) begin
+            spr_buf_w <= ( spr_buf_din[3:0] < 15 );
+            if ( spr_x_ofs < 15 ) begin
+                sprite_state <= 17;
+            end else begin
+                sprite_state <= 31;
+            end
+        end else if ( sprite_state == 17 ) begin
+            spr_buf_w <= 0;
+            spr_x_ofs <= spr_x_ofs + 1;
+            spr_x_pos <= spr_x_pos + 1;
+            sprite_state <= 8;
+        end else if ( sprite_state == 31 ) begin
+            spr_buf_w <= 0;
+            if ( sprite_num < 256 ) begin
+                // next sprite
+                sprite_num <= sprite_num + 1;
+                sprite_state <= 1;
+            end else begin
+                // done.
+                sprite_state <= 0;
+            end
+        end
+    end
+end
+
+wire [8:0] sprite_y = sprite_ram_dout[8:0]; // { 8 {sprite_ram_dout[8]} } ^
+reg  [3:0] spr_y_ofs;
+
+reg  [8:0]  spr_x_ofs;
+reg  [8:0]  spr_x_pos;
+reg [12:0]  spr_tile_num;
+reg         spr_flip_x;
+reg         spr_flip_y;
+
+reg [7:0] tx;
+reg [7:0] fg;
+reg [7:0] bg;
+reg [7:0] sp;
+
+reg [23:0] rgb_tx;
+reg [23:0] rgb_fg;
+reg [23:0] rgb_bg;
+reg [23:0] rgb_sp;
+
+reg [11:0] pen;
+reg pen_valid;
+
+always @ (posedge clk_sys) begin
+    if ( reset == 1 ) begin
+    end else begin
+        if ( hc < 257 ) begin
+            if ( clk6_count == 1 ) begin
+                line_buf_addr_r <= { ~vc[0], ( flip_screen == 0 ) ? hc[8:0] : { hc[8], ~hc[7:0]} };
+            end else if ( clk6_count == 2 ) begin
+                tx <= line_buf_tx_out[7:0];
+                fg <= line_buf_fg_out[7:0];
+                bg <= line_buf_bg_out[7:0];
+                sp <= spr_buf_dout[7:0];
+                rgb <= 0;
+                pen_valid <= 0;
+            end else if ( clk6_count == 3 ) begin
+                // priority
+                if ( gfx_bg_en == 1 ) begin
+                    pen <= 12'd768 + bg[7:0];
+                    pen_valid <= 1;
+                end
+                if ( sp[3:0] < 15 && gfx_sp_en == 1 && sp[7:4] >= 4) begin
+                    pen <= 12'd256 + sp[7:0];
+                    pen_valid <= 1;
+                end
+                if ( fg[3:0] < 15 && gfx_fg_en == 1 ) begin
+                    pen <= 12'd512 + fg[7:0];
+                    pen_valid <= 1;
+                end
+                if ( sp[3:0] < 15 && gfx_sp_en == 1 && sp[7:4] < 4) begin
+                    pen <= 12'd256 + sp[7:0];
+                    pen_valid <= 1;
+                end
+                if ( tx[3:0] < 15 && gfx_tx_en == 1 ) begin
+                    pen <= tx[7:0];
+                    pen_valid <= 1;
+                end
+            end else if ( clk6_count == 5 ) begin
+                tile_pal_addr <= pen;
+            end else if ( clk6_count == 7 ) begin
+                if ( hc < 257 && pen_valid == 1 ) begin
+                    rgb <= { tile_pal_dout[15:12],4'h0,tile_pal_dout[11:8],4'h0,tile_pal_dout[7:4],4'h0 };
+                end
+            end
+        end
+    end
+end
+
+
+/// 68k cpu
+
+reg flip_screen;
+
+always @ (posedge clk_sys) begin
+    if ( reset == 1 ) begin
+        m68k_dtack_n <= 1;
+        z80_irq_n <= 1;
+        z80_nmi_n <= 1;
+        flip_screen <= 0;
+    end else begin
+        if ( ss_regs_load ) begin
+            // board registers from a save state
+            { bg_scroll_x, bg_scroll_y, fg_scroll_x, fg_scroll_y } <= ss_regs_out[63:0];
+            sound_latch <= ss_regs_out[71:64];
+            z80_nmi_n   <= 1;
+            flip_screen <= ss_regs_out[73];
+            p1_invert   <= ss_regs_out[74];
+        end else if ( clk_18M == 1 && m68_bus_run ) begin
+            // tell 68k to wait for valid data. 0=ready 1=wait
+            // always ack when it's not program rom
+            m68k_dtack_n <= m68k_rom_cs ? !m68k_rom_valid : 0;
+            // select cpu data input based on what is active
+            m68k_din <=  ss_cpu_hit   ? ss_cpu_din :
+                         m68k_rom_cs  ? m68k_rom_data :
+                         m68k_ram_cs  ? m68k_ram_dout :
+                         m68k_txt_ram_cs ? m68k_txt_ram_dout :
+                         m68k_spr_cs  ? m68k_sprite_dout :
+                         m68k_fg_ram_cs ? m68k_fg_ram_dout :
+                         m68k_pal_cs ? m68k_pal_dout :
+                         m_invert_ctrl_cs ? 0 :
+                         input_p1_cs ? p1 :
+                         input_p2_cs ? p2 :
+                         input_dsw1_cs ? dsw1 :
+                         input_dsw2_cs ? dsw2 :
+                         input_coin_cs ? coin :
+                         16'd0;
+            // write asserted and rising cpu clock
+            if ( m68k_rw == 0 ) begin
+                if ( sound_latch_cs == 1 ) begin
+                    sound_latch <= m68k_dout[7:0];
+                    z80_nmi_n <= 0;
+                end
+                if ( fg_scroll_x_cs == 1 ) begin
+                    fg_scroll_x <= m68k_dout;
+                end
+                if ( fg_scroll_y_cs == 1 ) begin
+                    fg_scroll_y <= m68k_dout;
+                end
+                if ( bg_scroll_x_cs == 1 ) begin
+                    bg_scroll_x <= m68k_dout;
+                end
+                if ( bg_scroll_y_cs == 1 ) begin
+                    bg_scroll_y <= m68k_dout;
+                end
+                if ( m_invert_ctrl_cs == 1 ) begin
+                    p1_invert <= m68k_dout[0];
+                end
+                if ( flip_cs == 1 ) begin
+                    flip_screen <= m68k_dout[0];
+                end
+            end
+        end
+        if ( clk_4M == 1 && z80_en && z80_nmi_n == 0 && z80_addr == 16'h0066 ) begin
+            z80_nmi_n <= 1;
+        end
+        if ( ss_z80_nmi_set ) begin
+            z80_nmi_n <= 0;
+        end
+    end
+end
+
+// 68000 bus logic and Z80 run unless a save state holds them
+wire m68_bus_run = ~ss_busy | ss_cpu_run;
+wire z80_en      = ~ss_busy | ss_z80_run;
+
+////IORQ gets together with M1-pin active/low.
+//always @ (posedge clk_sys) begin
+//    
+//    if ( reset == 1 ) begin
+//        z80_a_irq_n <= 1;
+//    end else if ( clk_ym == 1 ) begin
+//        z80_a_irq_n <= 0;
+//    end 
+//    
+//    // check for interrupt ack and deassert int
+//    if ( M1_a_n == 0 && z80_a_irq_n == 0 && IORQ_a_n == 0 ) begin
+//        z80_a_irq_n <= 1;
+//    end
+//end
+
+wire    m68k_rom_cs;
+wire    m68k_ram_cs;
+wire    m68k_pal_cs;
+wire    m68k_txt_ram_cs;
+wire    m68k_spr_cs;
+wire    m68k_fg_ram_cs;
+wire    m68k_bg_ram_cs;
+wire    input_p1_cs;
+wire    input_p2_cs;
+wire    input_coin_cs;
+wire    input_dsw1_cs;
+wire    input_dsw2_cs;
+wire    irq_z80_cs;
+wire    bg_scroll_x_cs;
+wire    bg_scroll_y_cs;
+wire    fg_scroll_x_cs;
+wire    fg_scroll_y_cs;
+wire    m_invert_ctrl_cs;
+wire    sound_latch_cs;
+wire    flip_cs;
+
+wire    z80_rom_cs;
+wire    z80_ram_cs;
+wire    z80_latch_cs;
+wire    z80_sound0_cs;
+wire    z80_sound1_cs;
+wire    z80_upd_cs;
+wire    z80_upd_r_cs;
+
+chip_select cs (
+    .clk(clk_sys),
+
+    // 68k bus
+    .m68k_a(m68k_a),
+    .m68k_as_n(m68k_as_n),
+
+    .z80_addr,
+    .MREQ_n,
+    .IORQ_n,
+    .M1_n,
+
+    // 68k chip selects
+    .m68k_rom_cs,
+    .m68k_ram_cs,
+    .m68k_txt_ram_cs,
+    .m68k_spr_cs,
+    .m68k_fg_ram_cs,
+    .m68k_pal_cs,
+
+    .input_p2_cs,
+    .input_coin_cs,
+    .input_p1_cs,
+    .input_dsw1_cs,
+    .input_dsw2_cs,
+
+    .fg_scroll_y_cs,
+    .fg_scroll_x_cs,
+    .bg_scroll_y_cs,
+    .bg_scroll_x_cs,
+    .flip_cs,
+
+    .m_invert_ctrl_cs,
+
+    .sound_latch_cs,
+
+    // z80
+    .z80_rom_cs,
+    .z80_ram_cs,
+    .z80_latch_cs,
+    .z80_sound0_cs,
+    .z80_sound1_cs,
+    .z80_upd_cs,
+    .z80_upd_r_cs
+);
+
+reg [15:0] bg_scroll_x;
+reg [15:0] bg_scroll_y;
+
+reg [15:0] fg_scroll_x;
+reg [15:0] fg_scroll_y;
+
+reg [7:0]  sound_latch;
+
+// CPU outputs
+wire m68k_rw;        // Read = 1, Write = 0
+wire m68k_as_n;      // Address strobe
+wire m68k_lds_n;     // Lower byte strobe
+wire m68k_uds_n;     // Upper byte strobe
+wire m68k_E;
+wire [2:0] m68k_fc;  // Processor state
+wire m68k_reset_n_o; // Reset output signal
+wire m68k_halted_n;  // Halt output
+
+// CPU busses
+wire [15:0] m68k_dout;
+wire [23:0] m68k_a /* synthesis keep */;
+reg  [15:0] m68k_din;
+//assign m68k_a[0] = 1'b0;
+
+// CPU inputs
+reg  m68k_dtack_n;   // Data transfer ack (always ready)
+reg  m68k_ipl2_n;
+
+wire m68k_vpa_n = ~int_ack;//( m68k_lds_n == 0 && m68k_fc == 3'b111 ); // int ack
+
+reg int_ack;
+reg [1:0] vbl_sr;
+
+// next value of the level 4 interrupt line, seen by the 68000 at its clock edge (held during a save state)
+wire m68k_ipl2_n_next = reset ? 1'b1 : ss_regs_load ? ss_regs_out[75] : ss_busy ? m68k_ipl2_n :
+                        ( vbl_sr == 2'b01 ) ? 1'b0 : ( int_ack == 1 || vbl_sr == 2'b10 ) ? 1'b1 : m68k_ipl2_n;
+
+// vblank handling
+// process interrupt and sprite buffering
+always @ (posedge clk_sys ) begin
+    if ( reset == 1 ) begin
+        m68k_ipl2_n <= 1;
+        int_ack <= 0;
+    end else begin
+        vbl_sr <= { vbl_sr[0], vbl };
+        if ( clk_18M == 1 && m68_bus_run ) begin
+            int_ack <= ( m68k_as_n == 0 ) && ( m68k_fc == 3'b111 ); // cpu acknowledged the interrupt
+        end
+        if ( ss_regs_load ) begin
+            m68k_ipl2_n <= ss_regs_out[75];
+            int_ack <= ss_regs_out[76];
+        end else if ( ss_busy ) begin
+            // interrupt line held while a save state runs
+        end else if ( vbl_sr == 2'b01 ) begin // rising edge
+            // trigger sprite buffer copy
+            //  68k vbl interrupt
+            m68k_ipl2_n <= 0;
+        end else if ( int_ack == 1 || vbl_sr == 2'b10 ) begin
+            // deassert interrupt since 68k ack'ed.
+            m68k_ipl2_n <= 1;
+        end
+    end
+end
+
+wire reset_n;
+
+reg bg_enable;
+reg fg_enable;
+reg tx_enable;
+reg sp_enable;
+
+// fx68k clock generation
+reg fx68_phi1;
+always @(posedge clk_sys) begin
+    if ( clk_18M == 1 && m68_bus_run ) begin
+        fx68_phi1 <= ~fx68_phi1;
+    end
+end
+
+fx68k fx68k (
+    // input
+    .clk( clk_sys ),
+    .HALTn(1'b1),
+    .enPhi1( cen_18M &  fx68_phi1 ),
+    .enPhi2( cen_18M & ~fx68_phi1 ),
+
+    .extReset( ( reset | ss_cpu_reset ) & cen_18M ),
+    .pwrUp( ( reset | ss_cpu_reset ) & cen_18M ),
+
+    // output
+    .eRWn(m68k_rw),
+    .ASn(m68k_as_n),
+    .LDSn(m68k_lds_n),
+    .UDSn(m68k_uds_n),
+    .E(),
+    .VMAn(),
+    .FC0(m68k_fc[0]),
+    .FC1(m68k_fc[1]),
+    .FC2(m68k_fc[2]),
+    .BGn(),
+    .oRESETn(m68k_reset_n_o),
+    .oHALTEDn(m68k_halted_n),
+
+    // input
+    .VPAn( m68k_vpa_n ),
+    .DTACKn( m68k_dtack_n ),
+    .BERRn(1'b1),
+    .BRn(1'b1),
+    .BGACKn(1'b1),
+
+    .IPL0n( ~ss_cpu_irq7 ),
+    .IPL1n( ~ss_cpu_irq7 ),
+    .IPL2n( ss_cpu_irq7 ? 1'b0 : m68k_ipl2_n_next ),
+
+    // busses
+    .iEdb(m68k_din),
+    .oEdb(m68k_dout),
+    .eab(m68k_a[23:1])
+);
+
+
+// z80 audio
+wire    [7:0] z80_rom_data;
+wire    [7:0] z80_ram_data;
+
+wire   [15:0] z80_addr;
+reg     [7:0] z80_din;
+wire    [7:0] z80_dout;
+
+wire z80_wr_n;
+wire z80_rd_n;
+reg  z80_wait_n;
+reg  z80_irq_n;
+reg  z80_nmi_n;
+
+wire IORQ_n;
+wire MREQ_n;
+wire M1_n;
+
+wire [211:0] z80_reg;
+
+T80pa z80 (
+    .RESET_n    ( ~( reset | ss_z80_reset ) ),
+    .CLK        ( clk_sys    ),
+    .CEN_p      ( clk_4M & z80_en ),
+    .CEN_n      ( ~clk_4M & z80_en ),
+    .WAIT_n     ( z80_wait_n ),    // z80_wait_n
+    .INT_n      ( opl_irq_n  ),    // opl_irq_n
+    .NMI_n      ( z80_nmi_n  ),
+    .BUSRQ_n    ( 1'b1       ),
+    .RD_n       ( z80_rd_n   ),
+    .WR_n       ( z80_wr_n   ),
+    .A          ( z80_addr   ),
+    .DI         ( z80_din    ),
+    .DO         ( z80_dout   ),
+    // register load / readout for save states
+    .DIRSET     ( ss_z80_dirset ),
+    .DIR        ( ss_z80_dir ),
+    // unused
+    .R800_mode  ( 1'b0       ),
+    .OUT0       ( 1'b0       ),
+    .RFSH_n     (            ),
+    .IORQ_n     ( IORQ_n     ),
+    .M1_n       ( M1_n       ),    // for interrupt ack
+    .BUSAK_n    (            ),
+    .HALT_n     ( 1'b1       ),
+    .MREQ_n     ( MREQ_n     ),
+    .REG        ( z80_reg    )
+);
+
+reg opl_wait;
+
+always @ (posedge clk_sys) begin
+    if ( reset == 1 ) begin
+         z80_wait_n <= 1;
+    end else if ( ss_regs_load ) begin
+        // sound board registers from a save state
+        upd_reset  <= ss_regs_out[77];
+        sound_addr <= ss_regs_out[78];
+        sound_data <= ss_regs_out[86:79];
+    end else if ( clk_4M == 1 && z80_en ) begin
+        if ( z80_rd_n == 0 ) begin
+            if ( z80_rom_cs == 1 ) begin
+                z80_din <= z80_rom_data;
+            end
+            if ( z80_ram_cs == 1 ) begin
+                z80_din <= z80_ram_data;
+            end
+            if ( z80_latch_cs == 1 ) begin
+                z80_din <= sound_latch;
+            end
+            if ( z80_sound0_cs == 1 ) begin
+                sound_addr <= 0;
+                z80_din <= opl_dout;
+            end
+        end
+        sound_wr <= 0;
+        if ( z80_wr_n == 0 ) begin
+            // OPL2
+            if ( z80_sound0_cs == 1 || z80_sound1_cs == 1) begin
+                sound_data  <= z80_dout;
+                sound_addr <= z80_sound1_cs;
+                sound_wr <= 1;
+            end
+            if ( z80_upd_r_cs == 1 ) begin
+                upd_reset <= 1;
+            end else begin
+                upd_reset <= 0;
+            end
+        end
+    end
+end
+
+reg sound_addr;
+reg  [7:0] sound_data;
+
+// sound ic write enable
+reg sound_wr;
+
+wire [7:0] opl_dout;
+wire opl_irq_n;
+
+reg signed [15:0] sample;
+
+wire signed [8:0] upd_sample_out;
+
+assign AUDIO_S = 1'b1;
+
+wire opl_sample_clk;
+
+// 3.579 MHz
+
+// YM3812 inputs: the Z80, or the register replay of a save-state restore
+wire       opl_cen  = clk_4M & ( z80_en | ss_opl_replay );
+wire [7:0] opl_din  = ss_opl_replay ? ss_opl_r_din : sound_data;
+wire       opl_a0   = ss_opl_replay ? ss_opl_r_a0  : z80_sound1_cs;
+wire       opl_cs_n = ss_opl_replay ? ~ss_opl_r_write : ~( z80_sound0_cs | z80_sound1_cs );
+wire       opl_wr_n = ss_opl_replay ? ~ss_opl_r_write : ~sound_wr;
+
+jtopl #(.OPL_TYPE(2)) opl
+(
+    .rst(reset | ss_snd_reset),
+    .clk(clk_sys),
+    .cen(opl_cen),
+    .din(opl_din),
+    .addr(opl_a0),
+    .cs_n(opl_cs_n),
+    .wr_n(opl_wr_n),
+    .dout(opl_dout),
+    .irq_n(opl_irq_n),
+    .snd(sample),
+    .sample(opl_sample_clk)
+);
+
+reg upd_reset;
+
+jt7759 upd
+(
+    .rst( reset | upd_reset | ss_snd_reset ),
+    .clk( clk_sys           ),    // Use same clock as sound CPU
+    .cen( clk_640k & z80_en ),    // 640kHz
+    .stn( z80_wr_n | ~z80_upd_cs ),    // Start (active low)
+    .cs( 1'b1               ),
+    .mdn( 1'b1              ),    // MODE: 1 for stand alone mode, 0 for slave mode
+                                  // see chart in page 13 of PDF
+    .busyn(                 ),
+    // CPU interface
+    .wrn( 1'b1              ),    // for slave mode only, 31.7us after drqn is set
+    .din( z80_dout          ),
+    .drqn(                  ),    // data request. 50-70us delay after mdn goes low
+    // ROM interface
+    .rom_cs( upd_rom_cs     ),    // equivalent to DRQn in original chip
+    .rom_addr( upd_addr     ),    // output        [16:0]
+    .rom_data( upd_rom_data ),    // input          [7:0]
+    .rom_ok( upd_rom_valid  ),
+    // Sound output
+    .sound( upd_sample_out  )     //output signed [8:0]
+);
+
+wire [1:0] opl2_level = status[44:43];    // opl2 audio mix
+wire [1:0] upd_level = status[46:45];     // adpcm audio mix
+
+reg  [7:0] opl2_mult;
+reg  [7:0] upd_mult;
+
+// set the multiplier for each channel from menu
+
+always @( posedge clk_sys, posedge reset ) begin
+    if (reset) begin
+        opl2_mult<=0;
+        upd_mult<=0;
+    end else begin
+    case( opl2_level )
+        0: opl2_mult <= 8'h0c;    // 75%
+        1: opl2_mult <= 8'h08;    // 50%
+        2: opl2_mult <= 8'h04;    // 25%
+        3: opl2_mult <= 8'h00;    // 0%
+    endcase
+    case( upd_level )
+        0: upd_mult <= 8'h08;    // 50%
+        1: upd_mult <= 8'h06;    // 37.50%
+        2: upd_mult <= 8'h04;    // 25%
+        3: upd_mult <= 8'h00;    // 0%
+    endcase
+    end
+end
+
+wire signed [15:0] mono;
+
+audio_mix u_mix_mono (
+    .clk      ( clk_sys        ),
+    .rst      ( reset          ),
+    .opl      ( sample         ),
+    .upd      ( upd_sample_out ),
+    .opl_gain ( opl2_mult      ),
+    .upd_gain ( upd_mult       ),
+    .mixed    ( mono           )
+);
+
+always @ (posedge clk_sys ) begin
+    if ( pause_cpu == 1 ) begin
+        AUDIO_L <= 0;
+        AUDIO_R <= 0;
+    end else if ( pause_cpu == 0 ) begin
+        // mix audio
+        AUDIO_L <= mono;
+        AUDIO_R <= mono;
+    end
+end
+
+reg [7:0] dac1;
+reg [7:0] dac2;
+
+reg [16:0] gfx1_addr;
+reg [17:0] gfx2_addr;
+reg [16:0] gfx3_addr;
+reg [16:0] gfx4_addr;
+
+reg [7:0] gfx1_dout;
+reg [7:0] gfx2_dout;
+reg [7:0] gfx3_dout;
+reg [7:0] gfx4_dout;
+
+wire [15:0] m68k_ram_dout;
+wire [15:0] m68k_sprite_dout;
+wire [15:0] m68k_pal_dout;
+
+
+// ioctl download addressing
+wire m68k_ioctl_wr    = rom_download & ioctl_wr & (ioctl_addr >= 24'h000000) & (ioctl_addr < 24'h040000);
+wire tilemap_ioctl_wr = rom_download & ioctl_wr & (ioctl_addr >= 24'h0f0000) & (ioctl_addr < 24'h100000);
+wire txt_ioctl_wr     = rom_download & ioctl_wr & (ioctl_addr >= 24'h200000) & (ioctl_addr < 24'h208000);
+wire z80_ioctl_wr     = rom_download & ioctl_wr & (ioctl_addr >= 24'h0c0000) & (ioctl_addr < 24'h0d0000);
+wire upd_ioctl_wr     = rom_download & ioctl_wr & (ioctl_addr >= 24'h0d0000) & (ioctl_addr < 24'h0f0000);
+
+// main 68k ram high
+dpram_cen #(.LEN(8192)) ram8kx8_H (
+    .clock_a ( clk_sys ),
+    .cen_a ( cen_18M ),
+    .address_a ( m68k_a[13:1] ),
+    .wren_a ( !m68k_rw & m68k_ram_cs & !m68k_uds_n ),
+    .data_a ( m68k_dout[15:8]  ),
+    .q_a (  m68k_ram_dout[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( ss_wram_active ? ss_wram_addr : hs_ram_addr ),
+    .wren_b ( ss_wram_active ? ss_wram_we : hs_ram_we_h ),
+    .data_b ( ss_wram_active ? ss_wram_wdata[15:8] : hs_ram_wdata ),
+    .q_b ( wram_q[15:8] )
+    );
+
+// main 68k ram low
+dpram_cen #(.LEN(8192)) ram8kx8_L (
+    .clock_a ( clk_sys ),
+    .cen_a ( cen_18M ),
+    .address_a ( m68k_a[13:1] ),
+    .wren_a ( !m68k_rw & m68k_ram_cs & !m68k_lds_n ),
+    .data_a ( m68k_dout[7:0]  ),
+    .q_a ( m68k_ram_dout[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( ss_wram_active ? ss_wram_addr : hs_ram_addr ),
+    .wren_b ( ss_wram_active ? ss_wram_we : hs_ram_we_l ),
+    .data_b ( ss_wram_active ? ss_wram_wdata[7:0] : hs_ram_wdata ),
+    .q_b ( wram_q[7:0] )
+    );
+
+reg  [10:0] sprite_ram_addr;
+wire [15:0] sprite_ram_dout /* synthesis keep */;
+
+// main 68k sprite ram high
+// 2kx16
+dpram_cen #(.LEN(1024)) sprite_ram_H (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_spr_active ? ss_spr_addr : m68k_a[10:1] ),
+    .wren_a ( ss_spr_active ? ss_spr_we : ( !m68k_rw & m68k_spr_cs & !m68k_uds_n ) ),
+    .data_a ( ss_spr_active ? ss_spr_wdata[15:8] : m68k_dout[15:8] ),
+    .q_a (  m68k_sprite_dout[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( sprite_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( sprite_ram_dout[15:8] )
+    );
+
+// main 68k sprite ram low
+dpram_cen #(.LEN(1024)) sprite_ram_L (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_spr_active ? ss_spr_addr : m68k_a[10:1] ),
+    .wren_a ( ss_spr_active ? ss_spr_we : ( !m68k_rw & m68k_spr_cs & !m68k_lds_n ) ),
+    .data_a ( ss_spr_active ? ss_spr_wdata[7:0] : m68k_dout[7:0] ),
+    .q_a ( m68k_sprite_dout[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( sprite_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( sprite_ram_dout[7:0] )
+    );
+
+wire [12:0] fg_ram_addr;
+wire [15:0] fg_ram_dout;
+
+wire [15:0] m68k_fg_ram_dout;
+
+// foreground high
+dpram_cen #(.LEN(8192)) ram_fg_h (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_fg_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_fg_active ? ss_fg_addr : m68k_a[13:1] ),
+    .wren_a ( ss_fg_active ? ss_fg_we : ( !m68k_rw & m68k_fg_ram_cs & !m68k_uds_n ) ),
+    .data_a ( ss_fg_active ? ss_fg_wdata[15:8] : m68k_dout[15:8] ),
+    .q_a ( m68k_fg_ram_dout[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( fg_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( fg_ram_dout[15:8] )
+    );
+
+// foreground low
+dpram_cen #(.LEN(8192)) ram_fg_l (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_fg_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_fg_active ? ss_fg_addr : m68k_a[13:1] ),
+    .wren_a ( ss_fg_active ? ss_fg_we : ( !m68k_rw & m68k_fg_ram_cs & !m68k_lds_n ) ),
+    .data_a ( ss_fg_active ? ss_fg_wdata[7:0] : m68k_dout[7:0] ),
+    .q_a ( m68k_fg_ram_dout[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( fg_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( fg_ram_dout[7:0] )
+    );
+
+wire [15:0] m68k_txt_ram_dout;
+reg  [15:0] txt_ram_dout;
+reg   [9:0] txt_ram_addr;
+
+// text ram high
+dpram_cen #(.LEN(1024)) txt_ram_h (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_txt_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_txt_active ? ss_txt_addr : m68k_a[10:1] ),
+    .wren_a ( ss_txt_active ? ss_txt_we : ( !m68k_rw & m68k_txt_ram_cs & !m68k_uds_n ) ),
+    .data_a ( ss_txt_active ? ss_txt_wdata[15:8] : m68k_dout[15:8] ),
+    .q_a ( m68k_txt_ram_dout[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( txt_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( txt_ram_dout[15:8] )
+    );
+
+//  text ram low
+dpram_cen #(.LEN(1024)) txt_ram_l (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_txt_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_txt_active ? ss_txt_addr : m68k_a[10:1] ),
+    .wren_a ( ss_txt_active ? ss_txt_we : ( !m68k_rw & m68k_txt_ram_cs & !m68k_lds_n ) ),
+    .data_a ( ss_txt_active ? ss_txt_wdata[7:0] : m68k_dout[7:0] ),
+    .q_a ( m68k_txt_ram_dout[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( txt_ram_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( txt_ram_dout[7:0] )
+    );
+
+reg  [9:0] tile_pal_addr;
+reg [15:0] tile_pal_dout;
+
+// tile palette high
+dpram_cen #(.LEN(1024)) tile_pal_h (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_pal_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_pal_active ? ss_pal_addr : m68k_a[10:1] ),
+    .wren_a ( ss_pal_active ? ss_pal_we : ( !m68k_rw & m68k_pal_cs & !m68k_uds_n ) ),
+    .data_a ( ss_pal_active ? ss_pal_wdata[15:8] : m68k_dout[15:8] ),
+    .q_a ( m68k_pal_dout[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( tile_pal_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( tile_pal_dout[15:8] )
+    );
+
+//  tile palette low
+dpram_cen #(.LEN(1024)) tile_pal_l (
+    .clock_a ( clk_sys ),
+    .cen_a ( ss_pal_active ? 1'b1 : cen_18M ),
+    .address_a ( ss_pal_active ? ss_pal_addr : m68k_a[10:1] ),
+    .wren_a ( ss_pal_active ? ss_pal_we : ( !m68k_rw & m68k_pal_cs & !m68k_lds_n ) ),
+    .data_a ( ss_pal_active ? ss_pal_wdata[7:0] : m68k_dout[7:0] ),
+    .q_a ( m68k_pal_dout[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( tile_pal_addr ),
+    .wren_b ( 1'b0 ),
+    .data_b ( 8'd0 ),
+    .q_b( tile_pal_dout[7:0] )
+    );
+
+//z80 program rom
+dpram_cen #(.LEN(65536)) z80_rom (
+    .clock_a ( clk_sys ),
+    .cen_a ( cen_4M ),
+    .address_a ( z80_addr[15:0] ),
+    .wren_a ( 1'b0 ),
+    .data_a ( 8'd0 ),
+    .q_a ( z80_rom_data[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( ioctl_addr[15:0] ),
+    .wren_b ( z80_ioctl_wr ),
+    .data_b ( ioctl_dout ),
+    .q_b( )
+    );
+
+// z80 ram
+dpram_cen #(.LEN(2048)) z80_ram (
+    .clock_a ( clk_sys ),
+    .cen_a ( 1'b1 ),
+    .address_a ( ss_zram_addr ),
+    .wren_a ( ss_zram_we ),
+    .data_a ( ss_zram_wdata ),
+    .q_a ( zram_q ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( cen_4M ),
+    .address_b ( z80_addr[10:0] ),
+    .wren_b ( z80_ram_cs & ~z80_wr_n ),
+    .data_b ( z80_dout ),
+    .q_b ( z80_ram_data )
+    );
+
+reg [16:0] upd_addr;
+wire [7:0] upd_dout;
+
+//adpcm sample rom
+//dual_port_ram #(.LEN(131072)) upd_rom (
+//    .clock_a ( clk_sys ),
+//    .address_a ( upd_addr[16:0] ),
+//    .wren_a ( 1'b0 ),
+//    .data_a ( ),
+//    .q_a ( upd_dout[7:0] ),
+//
+//    .clock_b ( clk_sys ),
+//    .address_b ( ioctl_addr[16:0] ),
+//    .wren_b ( upd_ioctl_wr ),
+//    .data_b ( ioctl_dout  ),
+//    .q_b( )
+//    );
+
+//reg  [15:0] bg_tilemap_addr;
+//wire [15:0] bg_tilemap_dout;
+//reg  [15:0] bg_download_data;
+//reg         bg_download_wr;
+
+//// The SDRAM controller has a 32-bit interface, so we need to buffer the
+//// bytes received from the IOCTL interface in order to write 32-bit words to
+//// the SDRAM. 
+//download_buffer #(.SIZE(2)) bg_download_buffer
+//(
+//    .clk(clk_sys),
+//    .din(ioctl_dout),
+//    .dout(bg_download_data),
+//    .we(upd_ioctl_wr),
+//    .valid(bg_download_wr)
+//);
+
+
+wire [15:0] spr_pal_dout;
+wire [15:0] m68k_spr_pal_dout;
+
+reg  [8:0]  sprite_buffer_addr;  // 128 sprites
+reg  [63:0] sprite_buffer_din;
+wire [63:0] sprite_buffer_dout;
+reg  sprite_buffer_w;
+
+dual_port_ram #(.LEN(512), .DATA_WIDTH(64)) sprite_buffer (
+    .clock_a ( clk_sys ),
+    .address_a ( sprite_buffer_addr ),
+    .wren_a ( 1'b0 ),
+    .data_a ( ),
+    .q_a ( sprite_buffer_dout ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( sprite_buffer_addr ),
+    .wren_b ( sprite_buffer_w ),
+    .data_b ( sprite_buffer_din ),
+    .q_b( )
+    );
+
+reg          line_buf_tx_w;
+reg          line_buf_fg_w;
+reg          line_buf_bg_w;
+reg   [9:0]  line_buf_addr_w;
+reg   [7:0]  line_buf_din;
+//wire  [7:0]  line_buf_dout;
+
+reg   [9:0]  line_buf_addr_r;
+wire  [7:0]  line_buf_tx_out;
+wire  [7:0]  line_buf_fg_out;
+wire  [7:0]  line_buf_bg_out;
+
+reg   [9:0]  spr_buf_addr_w;
+reg          spr_buf_w;
+reg   [7:0]  spr_buf_din;
+wire  [7:0]  spr_buf_dout;
+
+dual_port_ram #(.LEN(1024), .DATA_WIDTH(8)) spr_buffer_ram (
+    .clock_a ( clk_sys ),
+    .address_a ( spr_buf_addr_w ),
+    .wren_a ( spr_buf_w ),
+    .data_a ( spr_buf_din ),
+    .q_a (  ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( line_buf_addr_r ),  // spr_buf_addr_r
+    .wren_b ( 0 ),
+    .q_b ( spr_buf_dout )
+    );
+
+// two line buffer for sprite rendering
+dual_port_ram #(.LEN(1024), .DATA_WIDTH(8)) line_buffer_ram_tx (
+    .clock_a ( clk_sys ),
+    .address_a ( line_buf_addr_w ),
+    .wren_a ( line_buf_tx_w ),
+    .data_a ( line_buf_din ),
+//    .q_a ( line_buf_dout ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( line_buf_addr_r ),
+    .wren_b ( 0 ),
+    .q_b ( line_buf_tx_out )
+    );
+
+dual_port_ram #(.LEN(1024), .DATA_WIDTH(8)) line_buffer_ram_fg (
+    .clock_a ( clk_sys ),
+    .address_a ( line_buf_addr_w ),
+    .wren_a ( line_buf_fg_w ),
+    .data_a ( line_buf_din ),
+//    .q_a ( line_buf_dout ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( line_buf_addr_r ),
+    .wren_b ( 0 ),
+    .q_b ( line_buf_fg_out )
+    );
+
+dual_port_ram #(.LEN(1024), .DATA_WIDTH(8)) line_buffer_ram_bg (
+    .clock_a ( clk_sys ),
+    .address_a ( line_buf_addr_w ),
+    .wren_a ( line_buf_bg_w ),
+    .data_a ( line_buf_din ),
+//    .q_a ( line_buf_dout ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( line_buf_addr_r ),
+    .wren_b ( 0 ),
+    .q_b ( line_buf_bg_out )
+    );
+
+reg  [11:0] gfx_txt_addr;
+wire  [7:0] gfx_txt_dout;
+
+reg  [11:0] gfx_txt_attr_addr;
+wire  [7:0] gfx_txt_attr_dout;
+
+wire [15:0] m68k_txt_attr_ram_dout;
+
+wire [15:0] m68k_rom_data;
+wire m68k_rom_valid;
+
+wire z80_rom_valid;
+
+reg  [17:0] sprite_rom_addr;
+wire [31:0] sprite_rom_data;
+reg sprite_rom_cs;
+wire sprite_rom_valid;
+
+reg  [15:0] fg_rom_addr;
+wire [31:0] fg_rom_data;
+reg fg_rom_cs;
+wire fg_rom_valid;
+
+reg  [15:0] bg_rom_addr;
+wire [31:0] bg_rom_data;
+reg bg_rom_cs;
+wire bg_rom_valid;
+
+reg  [12:0] txt_rom_addr;
+wire [31:0] txt_rom_data;
+reg txt_rom_cs;
+wire txt_rom_valid;
+
+reg  [16:0] upd_rom_addr;
+wire  [7:0] upd_rom_data;
+wire        upd_rom_cs;
+wire        upd_rom_valid;
+
+assign m68k_rom_valid = 1;
+
+dpram_cen #(.LEN(131072)) m68k_rom_h (
+    .clock_a ( clk_sys ),
+    .cen_a ( cen_18M ),
+    .address_a ( m68k_a[23:1] ),
+    .wren_a ( 1'b0 ),
+    .data_a ( 8'd0 ),
+    .q_a ( m68k_rom_data[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( ioctl_addr[17:1] ),
+    .wren_b ( m68k_ioctl_wr & ~ioctl_addr[0]),
+    .data_b ( ioctl_dout  ),
+    .q_b( )
+    );
+
+dpram_cen #(.LEN(131072)) m68k_rom_l (
+    .clock_a ( clk_sys ),
+    .cen_a ( cen_18M ),
+    .address_a ( m68k_a[23:1] ),
+    .wren_a ( 1'b0 ),
+    .data_a ( 8'd0 ),
+    .q_a ( m68k_rom_data[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .cen_b ( 1'b1 ),
+    .address_b ( ioctl_addr[17:1] ),
+    .wren_b ( m68k_ioctl_wr & ioctl_addr[0] ),
+    .data_b ( ioctl_dout  ),
+    .q_b( )
+    );
+
+dual_port_ram #(.LEN(32768)) tilemap_rom_h (
+    .clock_a ( clk_sys ),
+    .address_a ( tilemap_rom_addr ),
+    .wren_a ( 1'b0 ),
+    .data_a ( ),
+    .q_a ( tilemap_rom_data[15:8] ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( ioctl_addr[15:1] ),
+    .wren_b ( tilemap_ioctl_wr & ~ioctl_addr[0]),
+    .data_b ( ioctl_dout  ),
+    .q_b( )
+    );
+
+reg [14:0] tilemap_rom_addr;
+reg [15:0] tilemap_rom_data;
+
+dual_port_ram #(.LEN(32768)) tilemap_rom_l (
+    .clock_a ( clk_sys ),
+    .address_a ( tilemap_rom_addr ),
+    .wren_a ( 1'b0 ),
+    .data_a ( ),
+    .q_a ( tilemap_rom_data[7:0] ),
+
+    .clock_b ( clk_sys ),
+    .address_b ( ioctl_addr[15:1] ),
+    .wren_b ( tilemap_ioctl_wr & ioctl_addr[0] ),
+    .data_b ( ioctl_dout  ),
+    .q_b( )
+    );
+
+//////////////////////////////////////////////////////////////////
+// save states
+
+wire        ss_save, ss_load;
+wire        ss_busy, ss_cpu_run, ss_cpu_irq7, ss_cpu_reset, ss_cpu_hit;
+wire [15:0] ss_cpu_din;
+wire        ss_z80_run, ss_z80_reset, ss_z80_dirset, ss_z80_nmi_set;
+wire [211:0] ss_z80_dir;
+wire        ss_opl_replay, ss_opl_r_a0, ss_opl_r_write, ss_snd_reset;
+wire  [7:0] ss_opl_r_din;
+wire        ss_c4_load;
+wire  [5:0] ss_c4_val;
+wire [127:0] ss_regs_out;
+wire        ss_regs_load;
+
+wire        ss_wram_active, ss_wram_we;
+wire [12:0] ss_wram_addr;
+wire [15:0] ss_wram_wdata;
+wire [15:0] wram_q;
+wire        ss_spr_active, ss_spr_we;
+wire  [9:0] ss_spr_addr;
+wire [15:0] ss_spr_wdata;
+wire        ss_txt_active, ss_txt_we;
+wire  [9:0] ss_txt_addr;
+wire [15:0] ss_txt_wdata;
+wire        ss_fg_active, ss_fg_we;
+wire [12:0] ss_fg_addr;
+wire [15:0] ss_fg_wdata;
+wire        ss_pal_active, ss_pal_we;
+wire  [9:0] ss_pal_addr;
+wire [15:0] ss_pal_wdata;
+wire        ss_zram_active, ss_zram_we;
+wire [10:0] ss_zram_addr;
+wire  [7:0] ss_zram_wdata;
+wire  [7:0] zram_q;
+
+// board registers kept in a save state
+wire [111:0] ss_regs_in = { 25'd0, sound_data, sound_addr, upd_reset, int_ack, m68k_ipl2_n, p1_invert, flip_screen, z80_nmi_n,
+                            sound_latch, bg_scroll_x, bg_scroll_y, fg_scroll_x, fg_scroll_y };
+
+pi_ss pi_ss (
+    .clk(clk_sys),
+    .reset(reset),
+
+    .save_req(ss_save),
+    .load_req(ss_load),
+    .slot(ss_slot),
+    .busy(ss_busy),
+
+    .ddr(ddr_ss),
+
+    .cpu_a(m68k_a[23:1]),
+    .cpu_as_n(m68k_as_n),
+    .cpu_uds_n(m68k_uds_n),
+    .cpu_lds_n(m68k_lds_n),
+    .cpu_rw(m68k_rw),
+    .cpu_fc(m68k_fc),
+    .cpu_dout(m68k_dout),
+    .cpu_cen(cen_18M),
+    .cpu_run(ss_cpu_run),
+    .cpu_irq7(ss_cpu_irq7),
+    .cpu_reset(ss_cpu_reset),
+    .cpu_hit(ss_cpu_hit),
+    .cpu_din(ss_cpu_din),
+
+    .z80_m1_n(M1_n),
+    .z80_di(z80_din),
+    .z80_nmi_n(z80_nmi_n),
+    .z80_int_n(opl_irq_n),
+    .z80_reg(z80_reg),
+    .z80_run(ss_z80_run),
+    .z80_reset(ss_z80_reset),
+    .z80_dirset(ss_z80_dirset),
+    .z80_dir(ss_z80_dir),
+    .z80_nmi_set(ss_z80_nmi_set),
+
+    .opl_write(~opl_cs_n & ~opl_wr_n),
+    .opl_a0(opl_a0),
+    .opl_din(opl_din),
+    .opl_replay(ss_opl_replay),
+    .opl_r_a0(ss_opl_r_a0),
+    .opl_r_din(ss_opl_r_din),
+    .opl_r_write(ss_opl_r_write),
+    .snd_reset(ss_snd_reset),
+
+    .vc(vc),
+    .hc(hc),
+    .c6(clk6_count[3:0]),
+    .c4(clk4_count),
+    .c4_load(ss_c4_load),
+    .c4_val(ss_c4_val),
+
+    .regs_in(ss_regs_in),
+    .regs_out(ss_regs_out),
+    .regs_load(ss_regs_load),
+
+    .wram_active(ss_wram_active), .wram_addr(ss_wram_addr), .wram_wdata(ss_wram_wdata), .wram_we(ss_wram_we), .wram_q(wram_q),
+    .spr_active(ss_spr_active),   .spr_addr(ss_spr_addr),   .spr_wdata(ss_spr_wdata),   .spr_we(ss_spr_we),   .spr_q(m68k_sprite_dout),
+    .txt_active(ss_txt_active),   .txt_addr(ss_txt_addr),   .txt_wdata(ss_txt_wdata),   .txt_we(ss_txt_we),   .txt_q(m68k_txt_ram_dout),
+    .fg_active(ss_fg_active),     .fg_addr(ss_fg_addr),     .fg_wdata(ss_fg_wdata),     .fg_we(ss_fg_we),     .fg_q(m68k_fg_ram_dout),
+    .pal_active(ss_pal_active),   .pal_addr(ss_pal_addr),   .pal_wdata(ss_pal_wdata),   .pal_we(ss_pal_we),   .pal_q(m68k_pal_dout),
+    .zram_active(ss_zram_active), .zram_addr(ss_zram_addr), .zram_wdata(ss_zram_wdata), .zram_we(ss_zram_we), .zram_q(zram_q)
+);
+
+// keyboard events for the save-state UI: F1 and Alt only (F2 / F3 are the core's test and reset keys)
+reg  [9:0] ss_key_val = 0;
+reg        ss_key_tog = 0, ss_key_old = 0;
+always @(posedge clk_sys) begin
+    ss_key_old <= ps2_key[10];
+    if ( ss_key_old != ps2_key[10] && ( ps2_key[7:0] == 8'h05 || ps2_key[7:0] == 8'h11 ) ) begin
+        ss_key_tog <= ~ss_key_tog;
+        ss_key_val <= ps2_key[9:0];
+    end
+end
+
+// a pad holding the save-state button gives its directions to the save-state UI
+wire [3:0] ss_dirs = ( joy0[BTN_SS] ? joy0[3:0] : 4'd0 ) | ( joy1[BTN_SS] ? joy1[3:0] : 4'd0 );
+
+savestate_ui #(.INFO_TIMEOUT_BITS(25)) savestate_ui
+(
+    .clk            ( clk_sys ),
+    .ps2_key        ( { ss_key_tog, ss_key_val } ),
+    .allow_ss       ( ~reset & ~rom_download ),
+    .joySS          ( joy0[BTN_SS] | joy1[BTN_SS] ),
+    .joyRight       ( ss_dirs[0] ),
+    .joyLeft        ( ss_dirs[1] ),
+    .joyDown        ( ss_dirs[2] ),
+    .joyUp          ( ss_dirs[3] ),
+    .joyStart       ( 1'b0 ),
+    .joyRewind      ( 1'b0 ),
+    .rewindEnable   ( 1'b0 ),
+    .status_slot    ( status[65:64] ),
+    .autoincslot    ( status[66] ),
+    .OSD_saveload   ( status[68:67] ),
+    .ss_save        ( ss_save ),
+    .ss_load        ( ss_load ),
+    .ss_info_req    ( ss_info_req ),
+    .ss_info        ( ss_info ),
+    .statusUpdate   ( ss_status_set ),
+    .selected_slot  ( ss_slot )
+);
+
+//////////////////////////////////////////////////////////////////
+// high scores
+
+wire        hs_upload_req, hs_has_entries;
+wire [12:0] hs_ram_addr;
+wire  [7:0] hs_ram_wdata;
+wire        hs_ram_we_h, hs_ram_we_l;
+
+hiscore hiscore (
+    .clk(clk_sys),
+    .reset(reset),
+
+    .ioctl_download(ioctl_download),
+    .ioctl_upload(ioctl_upload),
+    .ioctl_wr(ioctl_wr),
+    .ioctl_index(ioctl_index),
+    .ioctl_addr(ioctl_addr),
+    .ioctl_dout(ioctl_dout),
+    .ioctl_din(ioctl_din),
+
+    .vblank(vbl),
+    .autosave(~status[69]),
+    .osd_open(OSD_STATUS),
+    .save_now(status[70]),
+    .upload_req(hs_upload_req),
+    .has_entries(hs_has_entries),
+
+    .ram_ok(~ss_busy),
+    .ram_free(~cen_18M),
+    .ram_addr(hs_ram_addr),
+    .ram_wdata(hs_ram_wdata),
+    .ram_we_h(hs_ram_we_h),
+    .ram_we_l(hs_ram_we_l),
+    .ram_q(wram_q)
+);
+
+rom_controller rom_controller
+(
+    .reset(reset),
+
+    // clock
+    .clk(clk_sys),
+
+// program ROM interface
+//    .prog_rom_cs(m68k_rom_cs),
+//    .prog_rom_oe(1),
+//    .prog_rom_addr(m68k_a[23:1]),
+//    .prog_rom_data(m68k_rom_data),
+//    .prog_rom_data_valid(m68k_rom_valid),
+
+    // sprite ROM interface
+    .sprite_rom_cs(sprite_rom_cs),
+    .sprite_rom_oe(1),
+    .sprite_rom_addr(sprite_rom_addr),
+    .sprite_rom_data(sprite_rom_data),
+    .sprite_rom_data_valid(sprite_rom_valid),
+
+    // fg ROM interface
+    .fg_rom_cs(fg_rom_cs),
+    .fg_rom_oe(1),
+    .fg_rom_addr(fg_rom_addr),
+    .fg_rom_data(fg_rom_data),
+    .fg_rom_data_valid(fg_rom_valid),
+
+    // bg ROM interface
+    .bg_rom_cs(bg_rom_cs),
+    .bg_rom_oe(1),
+    .bg_rom_addr(bg_rom_addr),
+    .bg_rom_data(bg_rom_data),
+    .bg_rom_data_valid(bg_rom_valid),
+
+    // text ROM interface
+    .text_rom_cs(txt_rom_cs),
+    .text_rom_oe(1),
+    .text_rom_addr(txt_rom_addr),
+    .text_rom_data(txt_rom_data),
+    .text_rom_data_valid(txt_rom_valid),
+
+    // sound samples ROM interface
+    .sound_rom_cs(upd_rom_cs),
+    .sound_rom_oe(1),
+    .sound_rom_addr(upd_addr),
+    .sound_rom_data(upd_rom_data),
+    .sound_rom_data_valid(upd_rom_valid),
+
+    // IOCTL interface
+    .ioctl_addr(ioctl_addr[24:0]),
+    .ioctl_data(ioctl_dout),
+    .ioctl_index(ioctl_index),
+    .ioctl_wr(ioctl_wr),
+    .ioctl_download(rom_download),
+
+    // SDRAM interface
+    .sdram_addr(sdram_addr),
+    .sdram_data(sdram_data),
+    .sdram_we(sdram_we),
+    .sdram_req(sdram_req),
+    .sdram_ack(sdram_ack),
+    .sdram_valid(sdram_valid),
+    .sdram_q(sdram_q)
+);
+
+reg  [22:0] sdram_addr;
+reg  [31:0] sdram_data;
+reg         sdram_we;
+reg         sdram_req;
+
+wire        sdram_ack;
+wire        sdram_valid;
+wire [31:0] sdram_q;
+
+sdram #(.CLK_FREQ( (CLKSYS+0.0))) sdram
+(
+  .reset(~pll_locked),
+  .clk(clk_sys),
+
+  // controller interface
+  .addr(sdram_addr),
+  .data(sdram_data),
+  .we(sdram_we),
+  .req(sdram_req),
+
+  .ack(sdram_ack),
+  .valid(sdram_valid),
+  .q(sdram_q),
+
+  // SDRAM interface
+  .sdram_a(SDRAM_A),
+  .sdram_ba(SDRAM_BA),
+  .sdram_dq(SDRAM_DQ),
+  .sdram_cke(SDRAM_CKE),
+  .sdram_cs_n(SDRAM_nCS),
+  .sdram_ras_n(SDRAM_nRAS),
+  .sdram_cas_n(SDRAM_nCAS),
+  .sdram_we_n(SDRAM_nWE),
+  .sdram_dqml(SDRAM_DQML),
+  .sdram_dqmh(SDRAM_DQMH)
+);
+
+endmodule
+
+module delay
+(
+    input clk,
+    input i,
+    output o
+);
+
+reg [5:0] r;
+
+assign o = r[5];
+
+always @(posedge clk) begin
+    r <= { r[4:0], i };
+end
+
+endmodule

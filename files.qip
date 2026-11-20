@@ -1,23 +1,43 @@
-set_global_assignment -name SDC_FILE Arcade-PrehistoricIsle.sdc
-set_global_assignment -name SYSTEMVERILOG_FILE Arcade-PrehistoricIsle.sv
-set_global_assignment -name QIP_FILE rtl/modules/T80/T80.qip
-set_global_assignment -name QIP_FILE rtl/modules/fx68k/fx68k.qip
-set_global_assignment -name QIP_FILE rtl/modules/jtopl/target/quartus/jt26.qip
-set_global_assignment -name QIP_FILE rtl/modules/jt7759/hdl/jt7759.qip
+# Project
+set_global_assignment -name SDC_FILE Arcade-PrehistoricIsleMD.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE Arcade-PrehistoricIsleMD.sv
+
+# Core
 set_global_assignment -name VERILOG_FILE rtl/video_timing.v
-set_global_assignment -name QIP_FILE sys/pll_q17.qip
-set_global_assignment -name QIP_FILE sys/pll_hdmi.qip
-set_global_assignment -name QIP_FILE sys/pll_cfg.qip
-set_global_assignment -name QIP_FILE sys/pll_audio.qip
-set_global_assignment -name CDF_FILE jtag.cdf
-set_global_assignment -name QIP_FILE sys/sys.qip
-set_global_assignment -name VERILOG_FILE rtl/pause.v
-set_global_assignment -name VERILOG_FILE rtl/mem/rom_controller.v
 set_global_assignment -name VERILOG_FILE rtl/chip_select.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_mix.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram_cen.sv
+set_global_assignment -name VERILOG_FILE rtl/mem/rom_controller.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/hiscore.sv
+
+# Save states: package and sequencer (core), then the stream files copied from MiSTer-devel/Arcade-TaitoF2_MiSTer @ 9438df98f1ea826c5398db43587992def0124603 (Martin Donlon, GPL-2.0), unmodified
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/system_consts.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pi_ss.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/memory_stream.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/savestates.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/ddram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/savestate_ui.sv
+
+# Pause: JimmyStones/Pause_MiSTer v0002 (Jim Gregory, GPL-3.0), unmodified
+set_global_assignment -name VERILOG_FILE rtl/pause.v
+
+# SDRAM controller and ROM segments: nullobject (Josh Bassett, MIT) via MiSTer-devel/Arcade-Rygar_MiSTer src/mem, modified by Erin Olafson
 set_global_assignment -name VHDL_FILE rtl/mem/math.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/segment.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/download_buffer.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/sdram.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/dual_port_ram.vhd
-set_global_assignment -name VERILOG_FILE rtl/modules/jtframe/hdl/sound/jtframe_mixer.v
-set_global_assignment -name VERILOG_FILE rtl/modules/jtframe/hdl/sound/jtframe_fir_mono.v
+
+# MC68000: ijor/fx68k @ 0602ee4627b10f301298f2673d826cdd6baa9327 (Jorge Cwik, GPL-3.0), unmodified
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/modules/fx68k/fx68k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/modules/fx68k/fx68kAlu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/modules/fx68k/uaddrPla.sv
+
+# Z80: T80 (Daniel Wallner, BSD-style; MiSTer changes by Sorgelig) from MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350c4e7fafb64067cf777b58a93bc7511fdc, unmodified
+set_global_assignment -name QIP_FILE rtl/modules/T80/T80.qip
+
+# YM3812: jotego/jtopl @ d3e73f173eb95a564a2cb3a0e0ef741b2618fb6f (Jose Tejada, GPL-3.0), unmodified
+set_global_assignment -name QIP_FILE rtl/modules/jtopl/target/quartus/jt26.qip
+
+# uPD7759: jotego/jt7759 @ c23dc9fd3605cb183991ad3806a258a9e941041f (Jose Tejada, GPL-3.0), unmodified
+set_global_assignment -name QIP_FILE rtl/modules/jt7759/hdl/jt7759.qip

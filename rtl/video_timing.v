@@ -24,19 +24,32 @@ module video_timing
     output reg  vbl
 );
 
+// sync position and width adjustments as signed values (-8..7)
+wire signed [10:0] hs_ofs = hs_offset;
+wire signed [10:0] hs_wid = hs_width;
+wire signed [10:0] vs_ofs = vs_offset;
+wire signed [10:0] vs_wid = vs_width;
+
 wire [8:0] h_ofs = 0;
 wire [8:0] HBL_START  = 256;
 wire [8:0] HBL_END    = 0;
-wire [8:0] HS_START   = HBL_START + 44 + $signed(hs_offset);
-wire [8:0] HS_END     = HBL_START + 76 + $signed(hs_offset) + $signed(hs_width);
+wire [8:0] HS_START   = 11'sd300 + hs_ofs;
+wire [8:0] HS_END     = 11'sd332 + hs_ofs + hs_wid;
 wire [8:0] HTOTAL     = 383;
 
 wire [8:0] v_ofs = 0;
 wire [8:0] VBL_START  = 241;
 wire [8:0] VBL_END    = 17;
-wire [8:0] VS_START   = VBL_START + ( refresh_mod ? 20 : 10 ) + $signed(vs_offset);
-wire [8:0] VS_END     = VBL_START + ( refresh_mod ? 28 : 16 )+ $signed(vs_offset) + $signed(vs_width);
 wire [8:0] VTOTAL     = 288 - ( refresh_mod ? 0 : 25 );
+
+// vsync start and length (at least one line), wrapped at the end of the frame
+wire signed [10:0] vs_start_raw = ( refresh_mod ? 11'sd261 : 11'sd251 ) + vs_ofs;
+wire signed [10:0] vs_len_raw   = ( refresh_mod ? 11'sd8 : 11'sd6 ) + vs_wid;
+wire        [10:0] vs_len       = ( vs_len_raw < 11'sd1 ) ? 11'd1 : vs_len_raw;
+wire        [10:0] vs_end_raw   = vs_start_raw + vs_len;
+wire        [10:0] vlines       = VTOTAL + 1'd1;
+wire [8:0] VS_START   = ( vs_start_raw >= $signed(vlines) ) ? vs_start_raw - vlines : vs_start_raw;
+wire [8:0] VS_END     = ( vs_end_raw >= vlines ) ? vs_end_raw - vlines : vs_end_raw;
 
 reg [8:0] v;
 reg [8:0] h;
@@ -45,7 +58,7 @@ assign vc = v - v_ofs;
 assign hc = h - h_ofs;
 
 always @ (posedge clk) begin
-    if (reset) begin
+    if (reset && clk_pix) begin
         h <= 0;
         v <= 0;
 
@@ -54,7 +67,7 @@ always @ (posedge clk) begin
 
         hsync <= 0;
         vsync <= 0;
-    end else if ( clk_pix == 1 ) begin 
+    end else if ( clk_pix == 1 ) begin
         // counter
         if (h == HTOTAL) begin
             h <= 0;
