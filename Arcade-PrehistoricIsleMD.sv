@@ -60,13 +60,6 @@ wire [2:0] scan_lines   = status[6:4];
 reg        refresh_mod;
 reg        new_vmode;
 
-always @(posedge clk_sys) begin
-    if (refresh_mod != ~status[19]) begin
-        refresh_mod <= ~status[19];
-        new_vmode <= ~new_vmode;
-    end
-end
-
 wire [3:0] hs_offset = status[27:24];
 wire [3:0] vs_offset = status[31:28];
 wire [3:0] hs_width  = status[59:56];
@@ -487,6 +480,14 @@ wire [8:0] vc;
 
 wire hsync;
 wire vsync;
+
+// OSD refresh rate, applied outside vblank where neither mode has a sync edge
+always @(posedge clk_sys) begin
+    if ( refresh_mod != ~status[19] && ~vbl ) begin
+        refresh_mod <= ~status[19];
+        new_vmode <= ~new_vmode;
+    end
+end
 
 reg hbl_delay, vbl_delay;
 

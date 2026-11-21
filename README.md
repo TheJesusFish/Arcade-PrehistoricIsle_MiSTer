@@ -21,6 +21,7 @@ This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRA
 - **DIP switches** follow MAME (`-listxml`), except where the game's own DIP sheet differs (see below). Changing a DIP in the OSD no longer resets the game; it takes effect with "Reset to apply". DIP and high-score downloads no longer reach the ROM loader; only the ROM download does.
 - Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
 - Fixed: holding the game in reset (F3, OSD Reset, core load) no longer stops the video sync; the game still starts at the beginning of a frame.
+- Fixed: changing Refresh Rate now takes effect while the picture is being drawn, so the frame where it changes has a single V-sync pulse. Before, a change near the end of a frame could give that frame two pulses, a pulse hundreds of lines long, or about 500 lines.
 - The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
 
 Button layout (changed from the previous release, so controller maps saved for these setnames need to be redone):
