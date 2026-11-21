@@ -144,7 +144,8 @@ localparam CONF_STR = {
     "Save to state 3,",
     "Restore state 3,",
     "Save to state 4,",
-    "Restore state 4;",
+    "Restore state 4,",
+    "Restore needs Native refresh;",
     "V,v",`BUILD_DATE
 };
 
@@ -169,8 +170,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .status_in(status_in),
     .status_set(ss_status_set),
     .status_menumask({14'd0, hs_has_entries, direct_video}),
-    .info_req(ss_info_req),
-    .info(ss_info),
+    .info_req(ss_info_req | ss_pos_reject),
+    .info(ss_pos_reject ? 8'd14 : ss_info),
     .forced_scandoubler(hps_forced_scandoubler),
     .gamma_bus(gamma_bus),
     .new_vmode(new_vmode),
@@ -230,6 +231,9 @@ wire        ss_info_req;
 wire  [7:0] ss_info;
 wire [127:0] status_in = { status[127:66], ss_slot, status[63:0] };
 
+// board registers kept in a save state, and as restored from one
+pi_ss_pkg::ss_regs_t ss_regs_in, ss_regs_out;
+
 wire [21:0] gamma_bus;
 
 // Inputs use inversion as a form of protection
@@ -246,7 +250,7 @@ always @ (posedge clk_sys ) begin
     p2 <= 16'hffff;
     p2[7:0] <= ~{ start2, p2_buttons[2:0], p2_right, p2_left ,p2_down, p2_up};
     dsw1 <=  { 8'hff, sw0_l };
-    dsw2 <=  { 8'hff, ~vbl, sw1_l[6:0] };
+    dsw2 <=  { 8'hff, ~vbl_game, sw1_l[6:0] };
     coin <=  ~ { 11'h000, key_tilt, key_test, key_service, coin_b, coin_a };
 end
 
@@ -455,8 +459,17 @@ end
 reg [1:0] reset_sync = 2'b11;
 always @(posedge clk_sys) reset_sync <= { reset_sync[0], RESET };
 
+wire reset_req = reset_sync[1] | key_reset | status[0];
+
+// game reset: held after a request until the video counters reach the start of a frame
+reg reset_hold = 1;
+always @(posedge clk_sys) begin
+    if ( reset_req ) reset_hold <= 1;
+    else if ( hc == 0 && vc == 0 ) reset_hold <= 0;
+end
+
 wire reset;
-assign reset = reset_sync[1] | key_reset | status[0];
+assign reset = reset_req | reset_hold;
 
 //////////////////////////////////////////////////////////////////
 wire rotate_ccw = 1;
@@ -484,10 +497,13 @@ always @ ( posedge clk_sys ) begin
     end
 end
 
+wire [8:0] vtotal;
+
+// never reset, so sync keeps running while the game is in reset
 video_timing video_timing (
     .clk(clk_sys),
     .clk_pix(cen_6M),
-    .reset(reset),
+    .reset(1'b0),
     .hs_offset(hs_offset),
     .vs_offset(vs_offset),
     .hs_width(hs_width),
@@ -495,11 +511,21 @@ video_timing video_timing (
     .refresh_mod(refresh_mod),
     .hc(hc),
     .vc(vc),
+    .vtotal(vtotal),
     .hbl(hbl),
     .vbl(vbl),
     .hsync(hsync),
     .vsync(vsync)
     );
+
+// vblank seen by the game: masked from a reset until the first vblank after it ends
+reg vbl_mask = 1;
+always @(posedge clk_sys) begin
+    if ( reset ) vbl_mask <= 1;
+    else if ( ~vbl ) vbl_mask <= 0;
+end
+
+wire vbl_game = vbl & ~vbl_mask;
 
 // PAUSE SYSTEM
 wire    pause_cpu;
@@ -953,11 +979,14 @@ always @ (posedge clk_sys) begin
     end else begin
         if ( ss_regs_load ) begin
             // board registers from a save state
-            { bg_scroll_x, bg_scroll_y, fg_scroll_x, fg_scroll_y } <= ss_regs_out[63:0];
-            sound_latch <= ss_regs_out[71:64];
+            bg_scroll_x <= ss_regs_out.bg_scroll_x;
+            bg_scroll_y <= ss_regs_out.bg_scroll_y;
+            fg_scroll_x <= ss_regs_out.fg_scroll_x;
+            fg_scroll_y <= ss_regs_out.fg_scroll_y;
+            sound_latch <= ss_regs_out.sound_latch;
             z80_nmi_n   <= 1;
-            flip_screen <= ss_regs_out[73];
-            p1_invert   <= ss_regs_out[74];
+            flip_screen <= ss_regs_out.flip_screen;
+            p1_invert   <= ss_regs_out.p1_invert;
         end else if ( clk_18M == 1 && m68_bus_run ) begin
             // tell 68k to wait for valid data. 0=ready 1=wait
             // always ack when it's not program rom
@@ -1140,7 +1169,7 @@ reg int_ack;
 reg [1:0] vbl_sr;
 
 // next value of the level 4 interrupt line, seen by the 68000 at its clock edge (held during a save state)
-wire m68k_ipl2_n_next = reset ? 1'b1 : ss_regs_load ? ss_regs_out[75] : ss_busy ? m68k_ipl2_n :
+wire m68k_ipl2_n_next = reset ? 1'b1 : ss_regs_load ? ss_regs_out.ipl2_n : ss_busy ? m68k_ipl2_n :
                         ( vbl_sr == 2'b01 ) ? 1'b0 : ( int_ack == 1 || vbl_sr == 2'b10 ) ? 1'b1 : m68k_ipl2_n;
 
 // vblank handling
@@ -1150,13 +1179,13 @@ always @ (posedge clk_sys ) begin
         m68k_ipl2_n <= 1;
         int_ack <= 0;
     end else begin
-        vbl_sr <= { vbl_sr[0], vbl };
+        vbl_sr <= { vbl_sr[0], vbl_game };
         if ( clk_18M == 1 && m68_bus_run ) begin
             int_ack <= ( m68k_as_n == 0 ) && ( m68k_fc == 3'b111 ); // cpu acknowledged the interrupt
         end
         if ( ss_regs_load ) begin
-            m68k_ipl2_n <= ss_regs_out[75];
-            int_ack <= ss_regs_out[76];
+            m68k_ipl2_n <= ss_regs_out.ipl2_n;
+            int_ack <= ss_regs_out.int_ack;
         end else if ( ss_busy ) begin
             // interrupt line held while a save state runs
         end else if ( vbl_sr == 2'b01 ) begin // rising edge
@@ -1283,9 +1312,9 @@ always @ (posedge clk_sys) begin
          z80_wait_n <= 1;
     end else if ( ss_regs_load ) begin
         // sound board registers from a save state
-        upd_reset  <= ss_regs_out[77];
-        sound_addr <= ss_regs_out[78];
-        sound_data <= ss_regs_out[86:79];
+        upd_reset  <= ss_regs_out.upd_reset;
+        sound_addr <= ss_regs_out.sound_addr;
+        sound_data <= ss_regs_out.sound_data;
     end else if ( clk_4M == 1 && z80_en ) begin
         if ( z80_rd_n == 0 ) begin
             if ( z80_rom_cs == 1 ) begin
@@ -1924,8 +1953,9 @@ wire        ss_opl_replay, ss_opl_r_a0, ss_opl_r_write, ss_snd_reset;
 wire  [7:0] ss_opl_r_din;
 wire        ss_c4_load;
 wire  [5:0] ss_c4_val;
-wire [127:0] ss_regs_out;
 wire        ss_regs_load;
+wire        ss_saved, ss_pos_reject;
+wire  [1:0] ss_slot_used;
 
 wire        ss_wram_active, ss_wram_we;
 wire [12:0] ss_wram_addr;
@@ -1948,9 +1978,23 @@ wire [10:0] ss_zram_addr;
 wire  [7:0] ss_zram_wdata;
 wire  [7:0] zram_q;
 
-// board registers kept in a save state
-wire [111:0] ss_regs_in = { 25'd0, sound_data, sound_addr, upd_reset, int_ack, m68k_ipl2_n, p1_invert, flip_screen, z80_nmi_n,
-                            sound_latch, bg_scroll_x, bg_scroll_y, fg_scroll_x, fg_scroll_y };
+// board registers kept in a save state (pi_ss fills in the YM3812 selected register)
+always_comb begin
+    ss_regs_in             = '0;
+    ss_regs_in.sound_data  = sound_data;
+    ss_regs_in.sound_addr  = sound_addr;
+    ss_regs_in.upd_reset   = upd_reset;
+    ss_regs_in.int_ack     = int_ack;
+    ss_regs_in.ipl2_n      = m68k_ipl2_n;
+    ss_regs_in.p1_invert   = p1_invert;
+    ss_regs_in.flip_screen = flip_screen;
+    ss_regs_in.z80_nmi_n   = z80_nmi_n;
+    ss_regs_in.sound_latch = sound_latch;
+    ss_regs_in.bg_scroll_x = bg_scroll_x;
+    ss_regs_in.bg_scroll_y = bg_scroll_y;
+    ss_regs_in.fg_scroll_x = fg_scroll_x;
+    ss_regs_in.fg_scroll_y = fg_scroll_y;
+end
 
 pi_ss pi_ss (
     .clk(clk_sys),
@@ -1960,6 +2004,9 @@ pi_ss pi_ss (
     .load_req(ss_load),
     .slot(ss_slot),
     .busy(ss_busy),
+    .saved(ss_saved),
+    .slot_used(ss_slot_used),
+    .pos_reject(ss_pos_reject),
 
     .ddr(ddr_ss),
 
@@ -1999,6 +2046,7 @@ pi_ss pi_ss (
 
     .vc(vc),
     .hc(hc),
+    .vtotal(vtotal),
     .c6(clk6_count[3:0]),
     .c4(clk4_count),
     .c4_load(ss_c4_load),
@@ -2016,15 +2064,34 @@ pi_ss pi_ss (
     .zram_active(ss_zram_active), .zram_addr(ss_zram_addr), .zram_wdata(ss_zram_wdata), .zram_we(ss_zram_we), .zram_q(zram_q)
 );
 
-// keyboard events for the save-state UI: F1 and Alt only (F2 / F3 are the core's test and reset keys)
+// save-state UI key code of slot n (F1-F4)
+function [7:0] ss_fkey(input [1:0] n);
+    case (n)
+        2'd0: ss_fkey = 8'h05;
+        2'd1: ss_fkey = 8'h06;
+        2'd2: ss_fkey = 8'h04;
+        default: ss_fkey = 8'h0c;
+    endcase
+endfunction
+
+// keyboard events for the save-state UI: Alt, F1 presses as the selected slot's key, and the slot advance after a save
 reg  [9:0] ss_key_val = 0;
-reg        ss_key_tog = 0, ss_key_old = 0;
+reg        ss_key_tog = 0, ss_key_old = 0, ss_advance = 0;
+wire       ss_key_ev = ss_key_old != ps2_key[10];
 always @(posedge clk_sys) begin
     ss_key_old <= ps2_key[10];
-    if ( ss_key_old != ps2_key[10] && ( ps2_key[7:0] == 8'h05 || ps2_key[7:0] == 8'h11 ) ) begin
+    if ( ss_key_ev && ps2_key[7:0] == 8'h11 ) begin
         ss_key_tog <= ~ss_key_tog;
         ss_key_val <= ps2_key[9:0];
+    end else if ( ss_key_ev && ps2_key[7:0] == 8'h05 && ps2_key[9] ) begin
+        ss_key_tog <= ~ss_key_tog;
+        ss_key_val <= { 2'b10, ss_fkey(ss_slot) };
+    end else if ( ss_advance && ~reset && ~rom_download ) begin
+        ss_key_tog <= ~ss_key_tog;
+        ss_key_val <= { 2'b00, ss_fkey(ss_slot_used + 1'd1) };
+        ss_advance <= 0;
     end
+    if ( ss_saved & status[66] ) ss_advance <= 1;
 end
 
 // a pad holding the save-state button gives its directions to the save-state UI
@@ -2044,7 +2111,7 @@ savestate_ui #(.INFO_TIMEOUT_BITS(25)) savestate_ui
     .joyRewind      ( 1'b0 ),
     .rewindEnable   ( 1'b0 ),
     .status_slot    ( status[65:64] ),
-    .autoincslot    ( status[66] ),
+    .autoincslot    ( 1'b0 ),
     .OSD_saveload   ( status[68:67] ),
     .ss_save        ( ss_save ),
     .ss_load        ( ss_load ),
@@ -2074,7 +2141,7 @@ hiscore hiscore (
     .ioctl_dout(ioctl_dout),
     .ioctl_din(ioctl_din),
 
-    .vblank(vbl),
+    .vblank(vbl_game),
     .autosave(~status[69]),
     .osd_open(OSD_STATUS),
     .save_now(status[70]),

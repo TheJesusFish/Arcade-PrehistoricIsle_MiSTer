@@ -16,6 +16,7 @@ module video_timing
 
     output [8:0] hc,
     output [8:0] vc,
+    output [8:0] vtotal,
 
     output reg  hsync,
     output reg  vsync,
@@ -41,6 +42,9 @@ wire [8:0] v_ofs = 0;
 wire [8:0] VBL_START  = 241;
 wire [8:0] VBL_END    = 17;
 wire [8:0] VTOTAL     = 288 - ( refresh_mod ? 0 : 25 );
+
+// last line of the frame in the current refresh mode
+assign vtotal = VTOTAL;
 
 // vsync start and length (at least one line), wrapped at the end of the frame
 wire signed [10:0] vs_start_raw = ( refresh_mod ? 11'sd261 : 11'sd251 ) + vs_ofs;

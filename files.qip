@@ -1,5 +1,6 @@
-# Project
+# Project (the save-state layout package comes first: the top level uses its types)
 set_global_assignment -name SDC_FILE Arcade-PrehistoricIsleMD.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pi_ss_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE Arcade-PrehistoricIsleMD.sv
 
 # Core

@@ -1,5 +1,6 @@
 // Save states for this board: 68000 / Z80 / YM3812 sequencer and the state chunks streamed to DDR3.
 import system_consts::*;
+import pi_ss_pkg::*;
 
 // RAM chunk: one RAM word per save-state access
 module ss_ram_chunk #(parameter AW = 10, DW = 16, SS_IDX = 0)
@@ -75,6 +76,9 @@ module pi_ss
     input              load_req,
     input        [1:0] slot,
     output             busy,
+    output reg         saved,          // pulse: a save is complete in DDR3
+    output reg   [1:0] slot_used,      // slot taken at the last request
+    output reg         pos_reject,     // pulse: restore refused, its video line does not exist in this refresh mode
 
     // DDR3 for the state stream
     ddr_if.to_host     ddr,
@@ -119,14 +123,15 @@ module pi_ss
     // video position and Z80 clock phase
     input        [8:0] vc,
     input        [8:0] hc,
+    input        [8:0] vtotal,
     input        [3:0] c6,
     input        [5:0] c4,
     output reg         c4_load,
     output       [5:0] c4_val,
 
-    // board registers ([119:112] of the chunk hold the YM3812 selected register)
-    input      [111:0] regs_in,
-    output     [127:0] regs_out,
+    // board registers (opl_sel of regs_in is filled in here)
+    input  ss_regs_t   regs_in,
+    output ss_regs_t   regs_out,
     output reg         regs_load,
 
     // RAM chunks
@@ -186,13 +191,37 @@ ssbus_mux #(.COUNT(10)) ssmux (
     .masters(ssb)
 );
 
+// DDR3: the sequencer's own slot-header accesses (a), then the state stream (b)
+ddr_if ddr_aux(), ddr_str();
+
+ddr_mux ddr_mux (
+    .clk,
+    .x(ddr),
+    .a(ddr_aux),
+    .b(ddr_str)
+);
+
+reg         aux_acq = 0, aux_rd = 0, aux_wr = 0;
+reg  [31:0] aux_addr;
+reg   [7:0] aux_be;
+
+assign ddr_aux.acquire    = aux_acq;
+assign ddr_aux.addr       = aux_addr;
+assign ddr_aux.wdata      = 64'd0;
+assign ddr_aux.read       = aux_rd;
+assign ddr_aux.write      = aux_wr;
+assign ddr_aux.burstcnt   = 8'd1;
+assign ddr_aux.byteenable = aux_be;
+
+wire [31:0] slot_base = SS_DDR_BASE + { 8'd0, slot_used, 22'd0 };
+
 save_state_data save_state_data (
     .clk,
     .reset,
-    .ddr,
+    .ddr(ddr_str),
     .read_start(ss_read),
     .write_start(ss_write),
-    .index(slot),
+    .index(slot_used),
     .busy(ss_busy),
     .ssbus(ssbus)
 );
@@ -204,10 +233,21 @@ reg   [3:0] pos_c6;
 reg   [5:0] pos_c4;
 wire [63:0] global_out;
 wire        global_written;
+ss_global_t global_in, global_rd;
+
+always_comb begin
+    global_in     = '0;
+    global_in.c4  = pos_c4;
+    global_in.c6  = pos_c6;
+    global_in.hc  = pos_hc;
+    global_in.vc  = pos_vc;
+    global_in.ssp = ssp_saved;
+end
+assign global_rd = global_out;
 
 ss_reg_chunk #(.WORDS(1), .SS_IDX(SSIDX_GLOBAL)) global_chunk (
     .clk, .ssbus(ssb[0]),
-    .din({ 1'b0, pos_c4, pos_c6, pos_hc, pos_vc, ssp_saved }),
+    .din(global_in),
     .dout(global_out),
     .written(global_written)
 );
@@ -235,8 +275,17 @@ assign z80_dir = zreg_out[211:0];
 reg  [7:0] opl_sel = 0;
 
 // board registers
+ss_regs_t   regs_save;
+wire [127:0] regs_dout;
+
+always_comb begin
+    regs_save         = regs_in;
+    regs_save.opl_sel = opl_sel;
+end
+assign regs_out = regs_dout;
+
 ss_reg_chunk #(.WORDS(2), .SS_IDX(SSIDX_REGS)) regs_chunk (
-    .clk, .ssbus(ssb[8]), .din({ 8'd0, opl_sel, regs_in }), .dout(regs_out), .written());
+    .clk, .ssbus(ssb[8]), .din(regs_save), .dout(regs_dout), .written());
 
 ///////////////////////////////////////////////////////////////////////////////
 // YM3812 register shadow (the 256 register values)
@@ -307,7 +356,9 @@ typedef enum logic [3:0] {
     ST_R_Z80,       // Z80 registers loaded
     ST_R_RESET,     // 68000 reset with the saved SSP and the handler as PC
     ST_R_HANDLER,   // 68000 runs the handler tail until the SSP write
-    ST_R_SYNC       // wait for the saved video position
+    ST_R_SYNC,      // wait for the saved video position
+    ST_S_MARK,      // 68000 held; slot size word cleared so an interrupted save reads as an empty slot
+    ST_R_CHECK      // game runs; slot header and global word read, restore refused if the saved line is not in this mode
 } st_t;
 
 st_t st = ST_IDLE;
@@ -315,6 +366,10 @@ st_t st = ST_IDLE;
 reg  [15:0] cnt;
 reg   [9:0] opl_idx;
 reg         got_state;
+reg         aux_ph = 0, aux_n = 0;
+ss_global_t chk_glob;
+
+assign chk_glob = ddr_aux.rdata;
 reg         nmi_saved_low;
 reg         z80_prefix = 0;
 reg         z80_m1_n_l = 1;
@@ -324,7 +379,7 @@ wire [23:0] byte_addr  = { cpu_a, 1'b0 };
 wire        in_handler = cpu_a[23:5] == 19'h7f800;
 wire        at_vector  = byte_addr == 24'h00007c || byte_addr == 24'h00007e;
 wire        at_reset   = byte_addr[23:3] == 21'd0;
-wire        override   = st == ST_S_HANDLER || st == ST_S_WRITE || st == ST_S_SYNC || st == ST_EXIT ||
+wire        override   = st == ST_S_HANDLER || st == ST_S_MARK || st == ST_S_WRITE || st == ST_S_SYNC || st == ST_EXIT ||
                          st == ST_R_RESET || st == ST_R_HANDLER || st == ST_R_SYNC;
 wire        serve_rst  = st == ST_R_RESET || st == ST_R_HANDLER;
 
@@ -353,6 +408,7 @@ wire fetch_out  = ds_start && cpu_rw && cpu_fc[1:0] == 2'b10 && !in_handler;
 wire z80_m1_fall = z80_m1_n_l & ~z80_m1_n;
 wire z80_safe    = z80_m1_fall && !z80_prefix && z80_nmi_n && !(~z80_int_n && z80_reg[210]);
 wire pos_match   = vc == pos_vc && hc == pos_hc && c6 == pos_c6;
+wire pos_gone    = pos_vc > vtotal;
 
 always @(posedge clk) begin
     z80_m1_n_l <= z80_m1_n;
@@ -367,19 +423,29 @@ always @(posedge clk) begin
     c4_load     <= 0;
     z80_nmi_set <= 0;
     opl_r_write <= 0;
+    saved       <= 0;
+    pos_reject  <= 0;
     if (global_written) got_state <= 1;
 
     if (reset) begin
         st <= ST_IDLE;
+        aux_acq <= 0;
+        aux_rd <= 0;
+        aux_wr <= 0;
+        aux_ph <= 0;
+        aux_n <= 0;
     end else case (st)
         ST_IDLE: begin
             cnt <= 0;
+            aux_ph <= 0;
+            aux_n <= 0;
             if (save_req) begin
+                slot_used <= slot;
                 st <= ST_S_Z80;
             end else if (load_req) begin
-                got_state <= 0;
-                ss_read <= 1;
-                st <= ST_R_READ;
+                slot_used <= slot;
+                aux_acq <= 1;
+                st <= ST_R_CHECK;
             end
         end
 
@@ -396,6 +462,21 @@ always @(posedge clk) begin
                 pos_hc <= hc;
                 pos_c6 <= c6;
                 pos_c4 <= c4;
+                aux_acq <= 1;
+                st <= ST_S_MARK;
+            end
+        end
+
+        // size word (bytes 4-7) cleared, change counter (bytes 0-3) kept; the stream writes the full header last
+        ST_S_MARK: if (!ddr_aux.busy) begin
+            if (!aux_ph) begin
+                aux_addr <= slot_base;
+                aux_be <= 8'hf0;
+                aux_wr <= 1;
+                aux_ph <= 1;
+            end else begin
+                aux_wr <= 0;
+                aux_ph <= 0;
                 ss_write <= 1;
                 cnt <= 0;
                 st <= ST_S_WRITE;
@@ -404,10 +485,14 @@ always @(posedge clk) begin
 
         ST_S_WRITE: begin
             cnt <= cnt + 1'd1;
-            if (cnt > 16'd4 && !ss_busy && !ss_write) st <= ST_S_SYNC;
+            if (ss_busy) aux_acq <= 0;
+            if (cnt > 16'd4 && !ss_busy && !ss_write) begin
+                saved <= 1;
+                st <= ST_S_SYNC;
+            end
         end
 
-        ST_S_SYNC: if (pos_match) st <= ST_EXIT;
+        ST_S_SYNC: if (pos_match || pos_gone) st <= ST_EXIT;
 
         ST_EXIT: if (fetch_out) begin
             if (nmi_saved_low) z80_nmi_set <= 1;
@@ -415,14 +500,50 @@ always @(posedge clk) begin
             st <= ST_IDLE;
         end
 
-        // restore
+        // restore: slot header (size word) and the global chunk word (base + 16) read before anything is held
+        ST_R_CHECK: begin
+            if (!ddr_aux.busy) aux_rd <= 0;
+            if (!aux_ph) begin
+                if (!ddr_aux.busy) begin
+                    aux_addr <= slot_base + (aux_n ? 32'd16 : 32'd0);
+                    aux_be <= 8'hff;
+                    aux_rd <= 1;
+                    aux_ph <= 1;
+                end
+            end else if (ddr_aux.rdata_ready) begin
+                aux_rd <= 0;
+                aux_ph <= 0;
+                aux_n <= 1;
+                if (!aux_n) begin
+                    // empty slot: nothing to restore
+                    if (ddr_aux.rdata[63:32] == 32'd0) begin
+                        aux_acq <= 0;
+                        st <= ST_IDLE;
+                    end
+                end else if (chk_glob.vc > vtotal) begin
+                    aux_acq <= 0;
+                    pos_reject <= 1;
+                    st <= ST_IDLE;
+                end else begin
+                    got_state <= 0;
+                    ss_read <= 1;
+                    cnt <= 0;
+                    st <= ST_R_READ;
+                end
+            end
+        end
+
         ST_R_READ: begin
             cnt <= cnt + 1'd1;
+            if (ss_busy) aux_acq <= 0;
             if (cnt > 16'd4 && !ss_busy && !ss_read) begin
                 cnt <= 0;
                 if (got_state) begin
-                    { pos_c4, pos_c6, pos_hc, pos_vc } <= global_out[62:32];
-                    ssp_saved <= global_out[31:0];
+                    pos_vc <= global_rd.vc;
+                    pos_hc <= global_rd.hc;
+                    pos_c6 <= global_rd.c6;
+                    pos_c4 <= global_rd.c4;
+                    ssp_saved <= global_rd.ssp;
                     regs_load <= 1;
                     st <= ST_R_LOAD;
                 end else begin
@@ -432,7 +553,7 @@ always @(posedge clk) begin
         end
 
         ST_R_LOAD: begin
-            nmi_saved_low <= ~regs_out[72];
+            nmi_saved_low <= ~regs_out.z80_nmi_n;
             cnt <= cnt + 1'd1;
             if (cnt == 16'd63) begin
                 cnt <= 0;
@@ -447,7 +568,7 @@ always @(posedge clk) begin
             opl_rd_addr <= opl_order(opl_idx[7:0]);
             if (cnt < 16'd4) begin
                 opl_r_a0 <= 0;
-                opl_r_din <= (opl_idx == 10'd256) ? regs_out[119:112] : opl_order(opl_idx[7:0]);
+                opl_r_din <= (opl_idx == 10'd256) ? regs_out.opl_sel : opl_order(opl_idx[7:0]);
                 opl_r_write <= 1;
             end else if (cnt >= 16'd8 && cnt < 16'd12 && opl_idx != 10'd256) begin
                 opl_r_a0 <= 1;
@@ -475,7 +596,7 @@ always @(posedge clk) begin
 
         ST_R_HANDLER: if (ssp_wr_lo) st <= ST_R_SYNC;
 
-        ST_R_SYNC: if (pos_match) begin
+        ST_R_SYNC: if (pos_match || pos_gone) begin
             c4_load <= 1;
             st <= ST_EXIT;
         end
@@ -489,7 +610,7 @@ function [7:0] opl_order(input [7:0] i);
     opl_order = (i == 8'hff) ? 8'h04 : (i >= 8'h04) ? i + 8'd1 : i;
 endfunction
 
-assign busy       = st != ST_IDLE;
+assign busy       = st != ST_IDLE && st != ST_R_CHECK;
 assign cpu_run    = st == ST_S_IRQ || st == ST_S_HANDLER || st == ST_EXIT || st == ST_R_RESET || st == ST_R_HANDLER;
 assign cpu_irq7   = st == ST_S_IRQ;
 assign cpu_reset  = st == ST_R_RESET;

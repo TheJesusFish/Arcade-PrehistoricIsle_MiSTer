@@ -15,11 +15,12 @@ This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRA
 - CPU and sound modules re-imported from their original repositories at the commits the previous release used (table below).
 - JTFRAME removed; the audio mixer is native code with the same output.
 - Every clock is `clk_sys` with clock enables, so the whole core is timing-constrained.
-- **Save states**: hold **L**, then **Down** saves, **Up** restores, **Left / Right** selects the slot (also Alt+F1 / F1 and the OSD).
+- **Save states**: hold **L**, then **Down** saves, **Up** restores, **Left / Right** selects the slot (also Alt+F1 / F1 and the OSD, all on the selected slot). With "Autoincrement Slot" on, the selection moves to the next slot once a save has finished.
 - **High scores** are restored from and saved to `config/nvram/<MRA name>.nvm` (entries from MAME `hiscore.dat`); saved when the OSD is opened (OSD option "Autosave Hiscores") or with "Save Hiscores".
 - **Controls**: each controller drives its own player's Start and Coin; player 2 is controller 2. "Swap P1/P2 Joystick" swaps the whole controllers.
 - **DIP switches** follow MAME (`-listxml`), except where the game's own DIP sheet differs (see below). Changing a DIP in the OSD no longer resets the game; it takes effect with "Reset to apply". DIP and high-score downloads no longer reach the ROM loader; only the ROM download does.
 - Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
+- Fixed: holding the game in reset (F3, OSD Reset, core load) no longer stops the video sync; the game still starts at the beginning of a frame.
 - The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
 
 Button layout (changed from the previous release, so controller maps saved for these setnames need to be redone):
@@ -43,6 +44,8 @@ DIP switches: MAME 0.288 for all sets, with these differences taken from the gam
 Note: the US set keeps a separate credit count for each side: Coin 1 (controller 1's Select, key 5) credits player 1 and Coin 2 (controller 2's Select, key 6) credits player 2.
 
 Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the unmodified jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes and the music tempo phase may shift by up to one timer tick.
+
+A save made in the Native refresh mode near the end of a frame records a line that the shorter NTSC frame does not have. Such a save is not restored while Refresh Rate is NTSC (OSD message "Restore needs Native refresh"); switch to Native to restore it. A save interrupted by a reset leaves its slot empty rather than holding a partial state.
 
 ## External Modules
 
