@@ -55,7 +55,7 @@ A save made in the Native refresh mode near the end of a frame records a line th
 | [**fx68k**](https://github.com/ijor/fx68k) | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | ijor/fx68k @ 0602ee4 | Jorge Cwik |
 | [**T80**](https://github.com/MiSTer-devel/NeoGeo_MiSTer/tree/master/rtl/cpu/T80) | [**Zilog Z80 CPU**](https://en.wikipedia.org/wiki/Zilog_Z80) | MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350 | Daniel Wallner, MiSTer changes by Sorgelig |
 | [**jtopl2**](https://github.com/jotego/jtopl) | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2) | jotego/jtopl @ d3e73f1 | Jose Tejada |
-| [**jt7759**](https://github.com/jotego/jt7759) | [**NEC µPD7759**](https://github.com/jotego/jt7759) | jotego/jt7759 @ c23dc9f | Jose Tejada |
+| [**jt7759**](https://github.com/jotego/jt7759) | [**NEC µPD7759**](https://github.com/jotego/jt7759) | jotego/jt7759 @ 94b472c | Jose Tejada |
 | [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Arcade-Rygar_MiSTer src/mem | Josh Bassett, modified by Erin Olafson |
 | [**pause**](https://github.com/JimmyStones/Pause_MiSTer) | Pause handling | Pause_MiSTer v0002 | Jim Gregory |
 | [**save states**](https://github.com/MiSTer-devel/Arcade-TaitoF2_MiSTer) | Save-state stream, DDR3 interface, save-state UI (`rtl/savestate/`) | Arcade-TaitoF2_MiSTer @ 9438df9 | Martin Donlon |
