@@ -308,8 +308,22 @@ wire  [7:0] shadow_data = opl_chunk_active ? ssb[9].data[7:0] : opl_din;
 always @(posedge clk) begin
     if (shadow_we) opl_shadow[shadow_addr] <= shadow_data;
     opl_rd_q <= opl_shadow[opl_chunk_active ? opl_chunk_addr : opl_rd_addr];
-    if (opl_write & ~opl_a0) opl_sel <= opl_din;
 end
+
+// shadow entries written since the last game reset, which zeroes the chip's registers and its selected register
+reg [255:0] opl_valid = '0;
+reg         opl_rd_valid;
+always @(posedge clk) begin
+    if (reset) begin
+        opl_sel   <= 0;
+        opl_valid <= '0;
+    end else begin
+        if (opl_write & ~opl_a0) opl_sel <= opl_din;
+        if (shadow_we) opl_valid[shadow_addr] <= 1'b1;
+    end
+    opl_rd_valid <= opl_valid[opl_chunk_active ? opl_chunk_addr : opl_rd_addr];
+end
+wire  [7:0] opl_rd_val = opl_rd_valid ? opl_rd_q : 8'd0;
 
 always @(posedge clk) begin
     ssb[9].setup(SSIDX_OPL, 32'd256, 0);
@@ -317,7 +331,7 @@ always @(posedge clk) begin
         if (ssb[9].write) begin
             ssb[9].write_ack(SSIDX_OPL);
         end else if (ssb[9].read) begin
-            if (opl_read_delay) ssb[9].read_response(SSIDX_OPL, { 56'd0, opl_rd_q });
+            if (opl_read_delay) ssb[9].read_response(SSIDX_OPL, { 56'd0, opl_rd_val });
             opl_read_delay <= 1;
         end
     end else begin
@@ -591,7 +605,7 @@ always @(posedge clk) begin
                 opl_r_write <= 1;
             end else if (cnt >= 16'd8 && cnt < 16'd12 && opl_idx != 10'd256) begin
                 opl_r_a0 <= 1;
-                opl_r_din <= opl_rd_q;
+                opl_r_din <= opl_rd_val;
                 opl_r_write <= 1;
             end else if (cnt == 16'd2000) begin
                 cnt <= 0;
