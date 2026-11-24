@@ -1376,8 +1376,21 @@ always @(posedge clk_sys) begin
     opl_ss_count <= ( opl_ss_count == 17 ) ? 5'd0 : opl_ss_count + 1'd1;
 end
 
+// Z80 clock edge as T80pa takes it (once per clk_4M high phase), so a clk_4M held high by a pause clocks the YM3812 once
+reg z80_cen_pol = 0;
+always @(posedge clk_sys) begin
+    if ( reset | ss_z80_reset ) begin
+        z80_cen_pol <= 0;
+    end else if ( clk_4M & z80_en & ~z80_cen_pol ) begin
+        z80_cen_pol <= 1;
+    end else if ( ~clk_4M & z80_en & z80_cen_pol ) begin
+        z80_cen_pol <= 0;
+    end
+end
+wire       z80_cen  = clk_4M & z80_en & ~z80_cen_pol;
+
 // YM3812 inputs: the Z80, or the register replay of a save-state restore
-wire       opl_cen  = ( ss_snd_reset | ss_opl_replay ) ? opl_ss_cen : ( clk_4M & z80_en );
+wire       opl_cen  = ( ss_snd_reset | ss_opl_replay ) ? opl_ss_cen : z80_cen;
 wire [7:0] opl_din  = ss_opl_replay ? ss_opl_r_din : sound_data;
 wire       opl_a0   = ss_opl_replay ? ss_opl_r_a0  : z80_sound1_cs;
 wire       opl_cs_n = ss_opl_replay ? ~ss_opl_r_write : ~( z80_sound0_cs | z80_sound1_cs );
@@ -1404,7 +1417,7 @@ jt7759 upd
 (
     .rst( reset | upd_reset | ss_snd_reset ),
     .clk( clk_sys           ),    // Use same clock as sound CPU
-    .cen( clk_640k & z80_en ),    // 640kHz
+    .cen( clk_640k & runz80 ),    // 640kHz, stopped with the Z80 by a pause or a save-state hold
     .stn( z80_wr_n | ~z80_upd_cs ),    // Start (active low)
     .cs( 1'b1               ),
     .mdn( 1'b1              ),    // MODE: 1 for stand alone mode, 0 for slave mode
@@ -2037,6 +2050,8 @@ pi_ss pi_ss (
     .z80_di(z80_din),
     .z80_nmi_n(z80_nmi_n),
     .z80_int_n(opl_irq_n),
+    .z80_cen(z80_cen),
+    .z80_mreq_n(MREQ_n),
     .z80_reg(z80_reg),
     .z80_run(ss_z80_run),
     .z80_reset(ss_z80_reset),

@@ -22,7 +22,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/savestate_ui.sv
 # Pause: JimmyStones/Pause_MiSTer v0002 (Jim Gregory, GPL-3.0), unmodified
 set_global_assignment -name VERILOG_FILE rtl/pause.v
 
-# SDRAM controller and ROM segments: nullobject (Josh Bassett, MIT) via MiSTer-devel/Arcade-Rygar_MiSTer src/mem, modified by Erin Olafson; sdram.vhd read capture modified for the MD version
+# SDRAM controller and ROM segments: nullobject (Josh Bassett, MIT) via MiSTer-devel/Arcade-Rygar_MiSTer src/mem, modified by Erin Olafson; sdram.vhd read capture and start-up refresh counter modified for the MD version
 set_global_assignment -name VHDL_FILE rtl/mem/math.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/segment.vhd
 set_global_assignment -name VHDL_FILE rtl/mem/download_buffer.vhd

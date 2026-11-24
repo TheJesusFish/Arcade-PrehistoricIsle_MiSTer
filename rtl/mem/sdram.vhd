@@ -33,7 +33,8 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 -- SOFTWARE.
 
--- Modified for Arcade-PrehistoricIsleMD (2026-11-23): both read words are captured in the DQ input registers.
+-- Modified for Arcade-PrehistoricIsleMD (2026-11-23): both read words are captured in the DQ input registers;
+-- the refresh counter is held at 0 during INIT.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -350,7 +351,8 @@ begin
     if reset = '1' then
       refresh_counter <= 0;
     elsif rising_edge(clk) then
-      if state = REFRESH and wait_counter = 0 then
+      -- held at 0 through INIT, whose 200 us wait would take the counter past 1023
+      if state = INIT or (state = REFRESH and wait_counter = 0) then
         refresh_counter <= 0;
       else
         refresh_counter <= refresh_counter + 1;

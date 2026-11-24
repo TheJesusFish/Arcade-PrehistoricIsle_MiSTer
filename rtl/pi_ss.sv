@@ -103,6 +103,8 @@ module pi_ss
     input        [7:0] z80_di,
     input              z80_nmi_n,
     input              z80_int_n,
+    input              z80_cen,
+    input              z80_mreq_n,
     input      [211:0] z80_reg,
     output             z80_run,
     output             z80_reset,
@@ -342,7 +344,7 @@ logic [15:0] handler[16] = '{
 ///////////////////////////////////////////////////////////////////////////////
 // sequencer
 
-typedef enum logic [3:0] {
+typedef enum logic [4:0] {
     ST_IDLE,
     ST_S_Z80,       // 68000 held; Z80 runs to a safe opcode fetch
     ST_S_IRQ,       // 68000 runs with interrupt level 7 until it acknowledges it
@@ -358,7 +360,9 @@ typedef enum logic [3:0] {
     ST_R_HANDLER,   // 68000 runs the handler tail until the SSP write
     ST_R_SYNC,      // wait for the saved video position
     ST_S_MARK,      // 68000 held; slot size word cleared so an interrupted save reads as an empty slot
-    ST_R_CHECK      // game runs; slot header and global word read, restore refused if the saved line is not in this mode
+    ST_R_CHECK,     // game runs; slot header and global word read, restore refused if the saved line is not in this mode
+    ST_S_Z80T,      // 68000 held; Z80 takes one more clock edge (it commits the last instruction's write), then held in T2
+    ST_R_Z80T       // Z80 takes two clock edges from reset, to T2 of the restored opcode fetch
 } st_t;
 
 st_t st = ST_IDLE;
@@ -372,6 +376,7 @@ ss_global_t chk_glob;
 assign chk_glob = ddr_aux.rdata;
 reg         nmi_saved_low;
 reg         z80_prefix = 0;
+reg         z80_after_ei = 0;
 reg         z80_m1_n_l = 1;
 reg         cpu_ds_n_l = 1;
 
@@ -404,16 +409,19 @@ wire ssp_wr_hi  = ds_start && !cpu_rw && byte_addr == 24'hff0000;
 wire ssp_wr_lo  = ds_start && !cpu_rw && byte_addr == 24'hff0002;
 wire fetch_out  = ds_start && cpu_rw && cpu_fc[1:0] == 2'b10 && !in_handler;
 
-// Z80 safe point: start of an opcode fetch that is not part of a prefixed instruction, with no interrupt about to be taken
+// Z80 safe point: start of an opcode fetch that is not part of a prefixed instruction or right after EI, with no interrupt about to be taken
 wire z80_m1_fall = z80_m1_n_l & ~z80_m1_n;
-wire z80_safe    = z80_m1_fall && !z80_prefix && z80_nmi_n && !(~z80_int_n && z80_reg[210]);
+wire z80_safe    = z80_m1_fall && !z80_prefix && !z80_after_ei && z80_nmi_n && !(~z80_int_n && z80_reg[210]);
 wire pos_match   = vc == pos_vc && hc == pos_hc && c6 == pos_c6;
 wire pos_gone    = pos_vc > vtotal;
 
 always @(posedge clk) begin
     z80_m1_n_l <= z80_m1_n;
     cpu_ds_n_l <= cpu_ds_n;
-    if (~z80_m1_n_l & z80_m1_n) z80_prefix <= z80_di == 8'hdd || z80_di == 8'hfd || z80_di == 8'hcb || z80_di == 8'hed;
+    if (~z80_m1_n_l & z80_m1_n) begin
+        z80_prefix   <= z80_di == 8'hdd || z80_di == 8'hfd || z80_di == 8'hcb || z80_di == 8'hed;
+        z80_after_ei <= z80_di == 8'hfb;
+    end
 end
 
 always @(posedge clk) begin
@@ -450,7 +458,16 @@ always @(posedge clk) begin
         end
 
         // save
-        ST_S_Z80: if (z80_safe) st <= ST_S_IRQ;
+        ST_S_Z80: if (z80_safe) st <= ST_S_Z80T;
+
+        ST_S_Z80T: begin
+            if (z80_cen) cnt <= cnt + 1'd1;
+            if (cnt == 16'd1) begin
+                cnt <= 0;
+                // an interrupt acknowledge (no MREQ in T1) is not a fetch: run on to the next safe one
+                st <= z80_mreq_n ? ST_S_Z80 : ST_S_IRQ;
+            end
+        end
 
         ST_S_IRQ: if (iack7) st <= ST_S_HANDLER;
 
@@ -586,6 +603,14 @@ always @(posedge clk) begin
             cnt <= cnt + 1'd1;
             if (cnt == 16'd31) begin
                 cnt <= 0;
+                st <= ST_R_Z80T;
+            end
+        end
+
+        ST_R_Z80T: begin
+            if (z80_cen) cnt <= cnt + 1'd1;
+            if (cnt == 16'd2) begin
+                cnt <= 0;
                 st <= ST_R_RESET;
             end
         end
@@ -615,7 +640,7 @@ assign busy       = st != ST_IDLE && st != ST_R_CHECK;
 assign cpu_run    = st == ST_S_IRQ || st == ST_S_HANDLER || st == ST_EXIT || st == ST_R_RESET || st == ST_R_HANDLER;
 assign cpu_irq7   = st == ST_S_IRQ;
 assign cpu_reset  = st == ST_R_RESET;
-assign z80_run    = st == ST_S_Z80 || st == ST_IDLE;
+assign z80_run    = st == ST_S_Z80 || st == ST_S_Z80T || st == ST_R_Z80T || st == ST_IDLE;
 assign z80_reset  = st == ST_R_LOAD || st == ST_R_OPL;
 assign z80_dirset = st == ST_R_Z80 && cnt < 16'd16;
 assign snd_reset  = st == ST_R_LOAD;
