@@ -437,6 +437,7 @@ always @(posedge clk) begin
 
     if (reset) begin
         st <= ST_IDLE;
+        nmi_saved_low <= 0;
         aux_acq <= 0;
         aux_rd <= 0;
         aux_wr <= 0;

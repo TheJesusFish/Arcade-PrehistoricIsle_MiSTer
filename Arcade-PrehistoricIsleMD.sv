@@ -628,7 +628,8 @@ reg  [31:0] spr_pix_data;
 reg  [8:0] x;
 wire [8:0] tx_x = x;
 wire [8:0] tx_y = ( flip_screen == 0 ) ? vc : ~vc;
-wire [8:0] sp_y = ( flip_screen == 0 ) ? vc : 255 - vc;
+// sprite line, 10 bits so that flipped lines past 255 match no sprite
+wire [9:0] sp_y = ( flip_screen == 0 ) ? vc : 10'd255 - vc;
 
 wire [13:0] fg_x = x  + fg_scroll_x;
 wire  [8:0] fg_y = ( flip_screen == 0 ) ? ( vc + fg_scroll_y ) : ( 255 - vc ) + fg_scroll_y;
@@ -827,16 +828,12 @@ always @ (posedge clk_sys) begin
             // x address valid 
             sprite_state <= 5;
         end else if ( sprite_state == 5 ) begin
-            // x value valid 
-            if ( sprite_ram_dout[7:0] < 8'hff ) begin
-                spr_x_ofs <= 0;
-                spr_x_pos <= sprite_ram_dout[8:0];
-                // read attribute / tile index
-                sprite_ram_addr <= sprite_ram_addr + 1;
-                sprite_state <= 6;
-            end else begin
-                sprite_state <= 31;
-            end
+            // x value valid
+            spr_x_ofs <= 0;
+            spr_x_pos <= sprite_ram_dout[8:0];
+            // read attribute / tile index
+            sprite_ram_addr <= sprite_ram_addr + 1;
+            sprite_state <= 6;
         end else if ( sprite_state == 6 ) begin
             // attribute address valid
             sprite_state <= 7;
@@ -886,7 +883,7 @@ always @ (posedge clk_sys) begin
             sprite_state <= 8;
         end else if ( sprite_state == 31 ) begin
             spr_buf_w <= 0;
-            if ( sprite_num < 256 ) begin
+            if ( sprite_num < 255 ) begin
                 // next sprite
                 sprite_num <= sprite_num + 1;
                 sprite_state <= 1;
@@ -1008,7 +1005,7 @@ always @ (posedge clk_sys) begin
                          input_coin_cs ? coin :
                          16'd0;
             // write asserted and rising cpu clock
-            if ( m68k_rw == 0 ) begin
+            if ( m68k_wr ) begin
                 if ( sound_latch_cs == 1 ) begin
                     sound_latch <= m68k_dout[7:0];
                     z80_nmi_n <= 0;
@@ -1044,6 +1041,8 @@ end
 
 // 68000 bus logic and Z80 run unless a save state holds them
 wire m68_bus_run = ~ss_busy | ss_cpu_run;
+// 68000 write, blocked while a restore resets the 68000 so a write cut off by the restore cannot land
+wire m68k_wr     = ~m68k_rw & ~ss_cpu_reset;
 wire z80_en      = ~ss_busy | ss_z80_run;
 
 ////IORQ gets together with M1-pin active/low.
@@ -1517,7 +1516,7 @@ dpram_cen #(.LEN(8192)) ram8kx8_H (
     .clock_a ( clk_sys ),
     .cen_a ( cen_18M ),
     .address_a ( m68k_a[13:1] ),
-    .wren_a ( !m68k_rw & m68k_ram_cs & !m68k_uds_n ),
+    .wren_a ( m68k_wr & m68k_ram_cs & !m68k_uds_n ),
     .data_a ( m68k_dout[15:8]  ),
     .q_a (  m68k_ram_dout[15:8] ),
 
@@ -1534,7 +1533,7 @@ dpram_cen #(.LEN(8192)) ram8kx8_L (
     .clock_a ( clk_sys ),
     .cen_a ( cen_18M ),
     .address_a ( m68k_a[13:1] ),
-    .wren_a ( !m68k_rw & m68k_ram_cs & !m68k_lds_n ),
+    .wren_a ( m68k_wr & m68k_ram_cs & !m68k_lds_n ),
     .data_a ( m68k_dout[7:0]  ),
     .q_a ( m68k_ram_dout[7:0] ),
 
@@ -1555,7 +1554,7 @@ dpram_cen #(.LEN(1024)) sprite_ram_H (
     .clock_a ( clk_sys ),
     .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
     .address_a ( ss_spr_active ? ss_spr_addr : m68k_a[10:1] ),
-    .wren_a ( ss_spr_active ? ss_spr_we : ( !m68k_rw & m68k_spr_cs & !m68k_uds_n ) ),
+    .wren_a ( ss_spr_active ? ss_spr_we : ( m68k_wr & m68k_spr_cs & !m68k_uds_n ) ),
     .data_a ( ss_spr_active ? ss_spr_wdata[15:8] : m68k_dout[15:8] ),
     .q_a (  m68k_sprite_dout[15:8] ),
 
@@ -1572,7 +1571,7 @@ dpram_cen #(.LEN(1024)) sprite_ram_L (
     .clock_a ( clk_sys ),
     .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
     .address_a ( ss_spr_active ? ss_spr_addr : m68k_a[10:1] ),
-    .wren_a ( ss_spr_active ? ss_spr_we : ( !m68k_rw & m68k_spr_cs & !m68k_lds_n ) ),
+    .wren_a ( ss_spr_active ? ss_spr_we : ( m68k_wr & m68k_spr_cs & !m68k_lds_n ) ),
     .data_a ( ss_spr_active ? ss_spr_wdata[7:0] : m68k_dout[7:0] ),
     .q_a ( m68k_sprite_dout[7:0] ),
 
@@ -1594,7 +1593,7 @@ dpram_cen #(.LEN(8192)) ram_fg_h (
     .clock_a ( clk_sys ),
     .cen_a ( ss_fg_active ? 1'b1 : cen_18M ),
     .address_a ( ss_fg_active ? ss_fg_addr : m68k_a[13:1] ),
-    .wren_a ( ss_fg_active ? ss_fg_we : ( !m68k_rw & m68k_fg_ram_cs & !m68k_uds_n ) ),
+    .wren_a ( ss_fg_active ? ss_fg_we : ( m68k_wr & m68k_fg_ram_cs & !m68k_uds_n ) ),
     .data_a ( ss_fg_active ? ss_fg_wdata[15:8] : m68k_dout[15:8] ),
     .q_a ( m68k_fg_ram_dout[15:8] ),
 
@@ -1611,7 +1610,7 @@ dpram_cen #(.LEN(8192)) ram_fg_l (
     .clock_a ( clk_sys ),
     .cen_a ( ss_fg_active ? 1'b1 : cen_18M ),
     .address_a ( ss_fg_active ? ss_fg_addr : m68k_a[13:1] ),
-    .wren_a ( ss_fg_active ? ss_fg_we : ( !m68k_rw & m68k_fg_ram_cs & !m68k_lds_n ) ),
+    .wren_a ( ss_fg_active ? ss_fg_we : ( m68k_wr & m68k_fg_ram_cs & !m68k_lds_n ) ),
     .data_a ( ss_fg_active ? ss_fg_wdata[7:0] : m68k_dout[7:0] ),
     .q_a ( m68k_fg_ram_dout[7:0] ),
 
@@ -1632,7 +1631,7 @@ dpram_cen #(.LEN(1024)) txt_ram_h (
     .clock_a ( clk_sys ),
     .cen_a ( ss_txt_active ? 1'b1 : cen_18M ),
     .address_a ( ss_txt_active ? ss_txt_addr : m68k_a[10:1] ),
-    .wren_a ( ss_txt_active ? ss_txt_we : ( !m68k_rw & m68k_txt_ram_cs & !m68k_uds_n ) ),
+    .wren_a ( ss_txt_active ? ss_txt_we : ( m68k_wr & m68k_txt_ram_cs & !m68k_uds_n ) ),
     .data_a ( ss_txt_active ? ss_txt_wdata[15:8] : m68k_dout[15:8] ),
     .q_a ( m68k_txt_ram_dout[15:8] ),
 
@@ -1649,7 +1648,7 @@ dpram_cen #(.LEN(1024)) txt_ram_l (
     .clock_a ( clk_sys ),
     .cen_a ( ss_txt_active ? 1'b1 : cen_18M ),
     .address_a ( ss_txt_active ? ss_txt_addr : m68k_a[10:1] ),
-    .wren_a ( ss_txt_active ? ss_txt_we : ( !m68k_rw & m68k_txt_ram_cs & !m68k_lds_n ) ),
+    .wren_a ( ss_txt_active ? ss_txt_we : ( m68k_wr & m68k_txt_ram_cs & !m68k_lds_n ) ),
     .data_a ( ss_txt_active ? ss_txt_wdata[7:0] : m68k_dout[7:0] ),
     .q_a ( m68k_txt_ram_dout[7:0] ),
 
@@ -1669,7 +1668,7 @@ dpram_cen #(.LEN(1024)) tile_pal_h (
     .clock_a ( clk_sys ),
     .cen_a ( ss_pal_active ? 1'b1 : cen_18M ),
     .address_a ( ss_pal_active ? ss_pal_addr : m68k_a[10:1] ),
-    .wren_a ( ss_pal_active ? ss_pal_we : ( !m68k_rw & m68k_pal_cs & !m68k_uds_n ) ),
+    .wren_a ( ss_pal_active ? ss_pal_we : ( m68k_wr & m68k_pal_cs & !m68k_uds_n ) ),
     .data_a ( ss_pal_active ? ss_pal_wdata[15:8] : m68k_dout[15:8] ),
     .q_a ( m68k_pal_dout[15:8] ),
 
@@ -1686,7 +1685,7 @@ dpram_cen #(.LEN(1024)) tile_pal_l (
     .clock_a ( clk_sys ),
     .cen_a ( ss_pal_active ? 1'b1 : cen_18M ),
     .address_a ( ss_pal_active ? ss_pal_addr : m68k_a[10:1] ),
-    .wren_a ( ss_pal_active ? ss_pal_we : ( !m68k_rw & m68k_pal_cs & !m68k_lds_n ) ),
+    .wren_a ( ss_pal_active ? ss_pal_we : ( m68k_wr & m68k_pal_cs & !m68k_lds_n ) ),
     .data_a ( ss_pal_active ? ss_pal_wdata[7:0] : m68k_dout[7:0] ),
     .q_a ( m68k_pal_dout[7:0] ),
 

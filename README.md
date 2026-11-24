@@ -22,6 +22,7 @@ This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRA
 - Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
 - Fixed: holding the game in reset (F3, OSD Reset, core load) no longer stops the video sync; the game still starts at the beginning of a frame.
 - Fixed: changing Refresh Rate now takes effect while the picture is being drawn, so the frame where it changes has a single V-sync pulse. Before, a change near the end of a frame could give that frame two pulses, a pulse hundreds of lines long, or about 500 lines.
+- Fixed: a sprite crossing the left or right screen edge is clipped instead of disappearing for a frame (a sprite at X 255 or -1 was not drawn), and sprite 0 is no longer drawn a second time in front of the other sprites.
 - The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
 
 Button layout (changed from the previous release, so controller maps saved for these setnames need to be redone):
