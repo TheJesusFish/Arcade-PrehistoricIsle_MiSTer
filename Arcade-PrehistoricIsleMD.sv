@@ -442,7 +442,7 @@ always @ (posedge clk_sys) begin
     clk_640k <= 0;
     if ( clk_640k_count > (N-1) ) begin
         clk_640k <= 1;
-        clk_640k_count <= clk_640k_count - (N-M-1);
+        clk_640k_count <= clk_640k_count - (N-M);
     end else begin
         clk_640k_count <= clk_640k_count + M;
     end
@@ -1207,10 +1207,10 @@ reg fg_enable;
 reg tx_enable;
 reg sp_enable;
 
-// fx68k clock generation
-reg fx68_phi1;
+// fx68k clock generation: the phase flips at every 68000 enable, so phi1 and phi2 alternate across pauses and holds
+reg fx68_phi1 = 1'b1;
 always @(posedge clk_sys) begin
-    if ( clk_18M == 1 && m68_bus_run ) begin
+    if ( cen_18M ) begin
         fx68_phi1 <= ~fx68_phi1;
     end
 end
@@ -1311,6 +1311,7 @@ reg opl_wait;
 always @ (posedge clk_sys) begin
     if ( reset == 1 ) begin
          z80_wait_n <= 1;
+         upd_reset  <= 0;
     end else if ( ss_regs_load ) begin
         // sound board registers from a save state
         upd_reset  <= ss_regs_out.upd_reset;
@@ -1340,10 +1341,9 @@ always @ (posedge clk_sys) begin
                 sound_addr <= z80_sound1_cs;
                 sound_wr <= 1;
             end
+            // uPD7759 reset = NOT bit 7 of the last write to port 0x80
             if ( z80_upd_r_cs == 1 ) begin
-                upd_reset <= 1;
-            end else begin
-                upd_reset <= 0;
+                upd_reset <= ~z80_dout[7];
             end
         end
     end
@@ -1368,8 +1368,16 @@ wire opl_sample_clk;
 
 // 3.579 MHz
 
+// YM3812 4 MHz enable for the reset and register replay of a save-state restore (the Z80's clk_4M is stopped then)
+reg  [4:0] opl_ss_count = 0;
+reg        opl_ss_cen = 0;
+always @(posedge clk_sys) begin
+    opl_ss_cen   <= ( opl_ss_count == 0 );
+    opl_ss_count <= ( opl_ss_count == 17 ) ? 5'd0 : opl_ss_count + 1'd1;
+end
+
 // YM3812 inputs: the Z80, or the register replay of a save-state restore
-wire       opl_cen  = clk_4M & ( z80_en | ss_opl_replay );
+wire       opl_cen  = ( ss_snd_reset | ss_opl_replay ) ? opl_ss_cen : ( clk_4M & z80_en );
 wire [7:0] opl_din  = ss_opl_replay ? ss_opl_r_din : sound_data;
 wire       opl_a0   = ss_opl_replay ? ss_opl_r_a0  : z80_sound1_cs;
 wire       opl_cs_n = ss_opl_replay ? ~ss_opl_r_write : ~( z80_sound0_cs | z80_sound1_cs );

@@ -13,3 +13,8 @@ set_multicycle_path -start -hold  -from [get_keepers {*fx68k:*|Ir[*]}] -to [get_
 create_generated_clock -name sdram_clk_pin -source [get_pins {emu|pll|pll_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}] [get_ports {SDRAM_CLK}]
 set_output_delay -clock sdram_clk_pin -max  2.0 [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_DQ[*] SDRAM_DQML SDRAM_DQMH SDRAM_nCS SDRAM_nCAS SDRAM_nRAS SDRAM_nWE SDRAM_CKE}]
 set_output_delay -clock sdram_clk_pin -min -1.3 [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_DQ[*] SDRAM_DQML SDRAM_DQMH SDRAM_nCS SDRAM_nCAS SDRAM_nRAS SDRAM_nWE SDRAM_CKE}]
+
+# SDRAM read data: valid tAC 6.0 ns after SDRAM_CLK and held tOH 2.5 ns (+-0.5 ns board), sampled two clk_sys edges later (CL 2)
+set_input_delay -clock sdram_clk_pin -max 6.5 [get_ports {SDRAM_DQ[*]}]
+set_input_delay -clock sdram_clk_pin -min 2.0 [get_ports {SDRAM_DQ[*]}]
+set_multicycle_path -setup -end -from [get_clocks {sdram_clk_pin}] -to [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}] 2

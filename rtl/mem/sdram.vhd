@@ -33,6 +33,8 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 -- SOFTWARE.
 
+-- Modified for Arcade-PrehistoricIsleMD (2026-11-23): both read words are captured in the DQ input registers.
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -215,6 +217,7 @@ architecture arch of sdram is
   signal data_reg : std_logic_vector(DATA_WIDTH-1 downto 0);
   signal we_reg   : std_logic;
   signal q_reg    : std_logic_vector(DATA_WIDTH-1 downto 0);
+  signal dq_reg   : std_logic_vector(SDRAM_DATA_WIDTH-1 downto 0);
 
   -- aliases to decode the address register
   alias col  : unsigned(SDRAM_COL_WIDTH-1 downto 0) is addr_reg(SDRAM_COL_WIDTH-1 downto 0);
@@ -376,10 +379,12 @@ begin
       valid <= '0';
 
       if state = READ then
-        if first_word = '1' then
-          q_reg(31 downto 16) <= sdram_dq;
-        elsif read_done = '1' then
-          q_reg(15 downto 0) <= sdram_dq;
+        -- each word lands in the DQ input register; the first moves to q_reg when the second arrives
+        if first_word = '1' or read_done = '1' then
+          dq_reg <= sdram_dq;
+        end if;
+        if read_done = '1' then
+          q_reg(31 downto 16) <= dq_reg;
           valid <= '1';
         end if;
       end if;
@@ -408,7 +413,7 @@ begin
   ack <= '1' when state = ACTIVE and wait_counter = 0 else '0';
 
   -- set output data
-  q <= q_reg;
+  q <= q_reg(31 downto 16) & dq_reg;
 
   -- deassert the clock enable at the beginning of the INIT state
   sdram_cke <= '0' when state = INIT and wait_counter = 0 else '1';

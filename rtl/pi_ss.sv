@@ -552,10 +552,11 @@ always @(posedge clk) begin
             end
         end
 
+        // 2048 clocks: the YM3812 reset must last 18 operator cycles (72 cycles of its 4 MHz enable) to clear every slot
         ST_R_LOAD: begin
             nmi_saved_low <= ~regs_out.z80_nmi_n;
             cnt <= cnt + 1'd1;
-            if (cnt == 16'd63) begin
+            if (cnt == 16'd2047) begin
                 cnt <= 0;
                 opl_idx <= 0;
                 st <= ST_R_OPL;
