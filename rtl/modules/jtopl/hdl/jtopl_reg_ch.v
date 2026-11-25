@@ -17,6 +17,8 @@
     Version: 1.0
     Date: 28-5-2022
 
+    Modified for Arcade-PrehistoricIsleMD (2026-11-24): reg_fb (channel feedback, C0-C8) cleared on rst, as the YM3812 reset clears it.
+
 */
 
 module jtopl_reg_ch(
@@ -103,6 +105,7 @@ always @(posedge clk, posedge rst) begin
         for( i=0; i<9; i=i+1 ) begin
             reg_block[i] <= 0;
             reg_fnum [i] <= 0;
+            reg_fb   [i] <= 0;
         end
     end else if(cen) begin
         i = 0;

@@ -424,6 +424,7 @@ wire ssp_wr_lo  = ds_start && !cpu_rw && byte_addr == 24'hff0002;
 wire fetch_out  = ds_start && cpu_rw && cpu_fc[1:0] == 2'b10 && !in_handler;
 
 // Z80 safe point: start of an opcode fetch that is not part of a prefixed instruction or right after EI, with no interrupt about to be taken
+// Z80 HALT state not saved: the sound program (one ROM for all five sets) never executes HALT
 wire z80_m1_fall = z80_m1_n_l & ~z80_m1_n;
 wire z80_safe    = z80_m1_fall && !z80_prefix && !z80_after_ei && z80_nmi_n && !(~z80_int_n && z80_reg[210]);
 wire pos_match   = vc == pos_vc && hc == pos_hc && c6 == pos_c6;

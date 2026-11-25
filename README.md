@@ -21,7 +21,8 @@ This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRA
 - **DIP switches** follow MAME (`-listxml`), except where the game's own DIP sheet differs (see below). Changing a DIP in the OSD no longer resets the game; it takes effect with "Reset to apply". DIP and high-score downloads no longer reach the ROM loader; only the ROM download does.
 - Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
 - Fixed: holding the game in reset (F3, OSD Reset, core load) no longer stops the video sync; the game still starts at the beginning of a frame.
-- Fixed: changing Refresh Rate now takes effect while the picture is being drawn, so the frame where it changes has a single V-sync pulse. Before, a change near the end of a frame could give that frame two pulses, a pulse hundreds of lines long, or about 500 lines.
+- Fixed: changing Refresh Rate now takes effect while the picture is being drawn, so the frame where it changes has a single V-sync pulse. Before, a change near the end of a frame could give that frame two pulses, a pulse hundreds of lines long, or about 500 lines. Checked on HDMI: through repeated NTSC / Native switches without a reload, the picture keeps the size of a fresh Native launch.
+- Fixed: a game reset now also clears the YM3812's channel feedback (registers C0-C8), as the chip's reset does; jtopl kept it over a reset (one-line change in jtopl_reg_ch.v).
 - Fixed: a sprite crossing the left or right screen edge is clipped instead of disappearing for a frame (a sprite at X 255 or -1 was not drawn), and sprite 0 is no longer drawn a second time in front of the other sprites.
 - The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
 
@@ -45,7 +46,7 @@ DIP switches: MAME 0.288 for all sets, with these differences taken from the gam
 
 Note: the US set keeps a separate credit count for each side: Coin 1 (controller 1's Select, key 5) credits player 1 and Coin 2 (controller 2's Select, key 6) credits player 2.
 
-Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the unmodified jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes and the music tempo phase may shift by up to one timer tick.
+Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes and the music tempo phase may shift by up to one timer tick. A sampled sound effect (µPD7759) that was playing when the state was saved is not resumed: the rest of that effect is lost, and later effects play normally. The sound CPU's HALT state is not saved; the sound program (the same ROM in all five sets) never executes HALT.
 
 A save made in the Native refresh mode near the end of a frame records a line that the shorter NTSC frame does not have. Such a save is not restored while Refresh Rate is NTSC (OSD message "Restore needs Native refresh"); switch to Native to restore it. A save interrupted by a reset leaves its slot empty rather than holding a partial state.
 
@@ -55,7 +56,7 @@ A save made in the Native refresh mode near the end of a frame records a line th
 |---|---|---|---|
 | [**fx68k**](https://github.com/ijor/fx68k) | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | ijor/fx68k @ 0602ee4 | Jorge Cwik |
 | [**T80**](https://github.com/MiSTer-devel/NeoGeo_MiSTer/tree/master/rtl/cpu/T80) | [**Zilog Z80 CPU**](https://en.wikipedia.org/wiki/Zilog_Z80) | MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350 | Daniel Wallner, MiSTer changes by Sorgelig |
-| [**jtopl2**](https://github.com/jotego/jtopl) | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2) | jotego/jtopl @ d3e73f1 | Jose Tejada |
+| [**jtopl2**](https://github.com/jotego/jtopl) | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2) | jotego/jtopl @ d3e73f1 (jtopl_reg_ch.v: channel feedback cleared on reset for the MD version) | Jose Tejada |
 | [**jt7759**](https://github.com/jotego/jt7759) | [**NEC µPD7759**](https://github.com/jotego/jt7759) | jotego/jt7759 @ 94b472c | Jose Tejada |
 | [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Arcade-Rygar_MiSTer src/mem | Josh Bassett, modified by Erin Olafson (read capture and start-up refresh counter modified for the MD version) |
 | [**pause**](https://github.com/JimmyStones/Pause_MiSTer) | Pause handling | Pause_MiSTer v0002 | Jim Gregory |

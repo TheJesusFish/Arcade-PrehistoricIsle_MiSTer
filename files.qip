@@ -37,7 +37,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/modules/fx68k/uaddrPla.sv
 # Z80: T80 (Daniel Wallner, BSD-style; MiSTer changes by Sorgelig) from MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350c4e7fafb64067cf777b58a93bc7511fdc, unmodified
 set_global_assignment -name QIP_FILE rtl/modules/T80/T80.qip
 
-# YM3812: jotego/jtopl @ d3e73f173eb95a564a2cb3a0e0ef741b2618fb6f (Jose Tejada, GPL-3.0), unmodified
+# YM3812: jotego/jtopl @ d3e73f173eb95a564a2cb3a0e0ef741b2618fb6f (Jose Tejada, GPL-3.0); jtopl_reg_ch.v modified for the MD version: channel feedback cleared on reset
 set_global_assignment -name QIP_FILE rtl/modules/jtopl/target/quartus/jt26.qip
 
 # uPD7759: jotego/jt7759 @ 94b472c002e29798c5ac719d860f83633b825156 (Jose Tejada, GPL-3.0), unmodified
