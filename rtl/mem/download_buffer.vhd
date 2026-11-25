@@ -33,6 +33,8 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 -- SOFTWARE.
 
+-- Modified for Arcade-PrehistoricIsleMD (2026-11-24): the byte counter wraps to 0 explicitly after the last byte of a word.
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -83,13 +85,12 @@ begin
         -- write the word to the output data bus
         dout((SIZE-counter)*8-1 downto (SIZE-counter-1)*8) <= din;
 
-        -- increment the counter
-        counter <= counter + 1;
-
-        -- flush the buffer if it is full
+        -- flush the buffer if it is full, and start the next word
         if counter = SIZE-1 then
+          counter <= 0;
           valid <= '1';
         else
+          counter <= counter + 1;
           valid <= '0';
         end if;
       end if;

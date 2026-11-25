@@ -79,6 +79,8 @@ module pi_ss
     output reg         saved,          // pulse: a save is complete in DDR3
     output reg   [1:0] slot_used,      // slot taken at the last request
     output reg         pos_reject,     // pulse: restore refused, its video line does not exist in this refresh mode
+    output reg         bad_reject,     // pulse: restore refused, the slot does not hold a complete state of this core
+    output             snd_mute,       // audio output muted while an accepted restore runs
 
     // DDR3 for the state stream
     ddr_if.to_host     ddr,
@@ -178,6 +180,35 @@ module pi_ss
 localparam SSIDX_GLOBAL = 0, SSIDX_WRAM = 1, SSIDX_SPR = 2, SSIDX_TXT = 3, SSIDX_FG = 4, SSIDX_PAL = 5,
            SSIDX_ZRAM = 6, SSIDX_ZREG = 7, SSIDX_REGS = 8, SSIDX_OPL = 9;
 
+// RAM chunk address widths
+localparam int AW_WRAM = 13, AW_SPR = 10, AW_TXT = 10, AW_FG = 13, AW_PAL = 10, AW_ZRAM = 11;
+
+// stream layout (64-bit words after the slot header): each chunk's header word, then its data words
+localparam int P_GLOBAL = 1;
+localparam int P_WRAM   = P_GLOBAL + 1 + 1;
+localparam int P_SPR    = P_WRAM + 1 + 2**AW_WRAM / 4;
+localparam int P_TXT    = P_SPR  + 1 + 2**AW_SPR / 4;
+localparam int P_FG     = P_TXT  + 1 + 2**AW_TXT / 4;
+localparam int P_PAL    = P_FG   + 1 + 2**AW_FG / 4;
+localparam int P_ZRAM   = P_PAL  + 1 + 2**AW_PAL / 4;
+localparam int P_ZREG   = P_ZRAM + 1 + 2**AW_ZRAM / 8;
+localparam int P_REGS   = P_ZREG + 1 + 4;
+localparam int P_OPL    = P_REGS + 1 + 2;
+localparam int P_END    = P_OPL  + 1 + 256 / 8;
+localparam [31:0] SS_SIZE = 32'(P_END * 2);
+
+// board counter ranges and the 68000 work RAM, for the saved position and SSP
+localparam [8:0]  HC_LAST = 9'd383, VC_LAST = 9'd288;
+localparam [3:0]  C6_LAST = 4'd11;
+localparam [5:0]  C4_LAST = 6'd17;
+localparam [23:0] WRAM_LO = 24'h070000, WRAM_HI = 24'h074000;
+localparam [23:0] SSP_POP = 24'd70;
+
+// chunk header word: index, element width, element count
+function automatic [63:0] ss_hdr(input [7:0] idx, input [1:0] width, input [31:0] count);
+    ss_hdr = { idx, 22'd0, width, count };
+endfunction
+
 ///////////////////////////////////////////////////////////////////////////////
 // state stream
 
@@ -254,17 +285,17 @@ ss_reg_chunk #(.WORDS(1), .SS_IDX(SSIDX_GLOBAL)) global_chunk (
     .written(global_written)
 );
 
-ss_ram_chunk #(.AW(13), .DW(16), .SS_IDX(SSIDX_WRAM)) wram_chunk (
+ss_ram_chunk #(.AW(AW_WRAM), .DW(16), .SS_IDX(SSIDX_WRAM)) wram_chunk (
     .clk, .ssbus(ssb[1]), .active(wram_active), .addr(wram_addr), .wdata(wram_wdata), .we(wram_we), .q(wram_q));
-ss_ram_chunk #(.AW(10), .DW(16), .SS_IDX(SSIDX_SPR)) spr_chunk (
+ss_ram_chunk #(.AW(AW_SPR), .DW(16), .SS_IDX(SSIDX_SPR)) spr_chunk (
     .clk, .ssbus(ssb[2]), .active(spr_active), .addr(spr_addr), .wdata(spr_wdata), .we(spr_we), .q(spr_q));
-ss_ram_chunk #(.AW(10), .DW(16), .SS_IDX(SSIDX_TXT)) txt_chunk (
+ss_ram_chunk #(.AW(AW_TXT), .DW(16), .SS_IDX(SSIDX_TXT)) txt_chunk (
     .clk, .ssbus(ssb[3]), .active(txt_active), .addr(txt_addr), .wdata(txt_wdata), .we(txt_we), .q(txt_q));
-ss_ram_chunk #(.AW(13), .DW(16), .SS_IDX(SSIDX_FG)) fg_chunk (
+ss_ram_chunk #(.AW(AW_FG), .DW(16), .SS_IDX(SSIDX_FG)) fg_chunk (
     .clk, .ssbus(ssb[4]), .active(fg_active), .addr(fg_addr), .wdata(fg_wdata), .we(fg_we), .q(fg_q));
-ss_ram_chunk #(.AW(10), .DW(16), .SS_IDX(SSIDX_PAL)) pal_chunk (
+ss_ram_chunk #(.AW(AW_PAL), .DW(16), .SS_IDX(SSIDX_PAL)) pal_chunk (
     .clk, .ssbus(ssb[5]), .active(pal_active), .addr(pal_addr), .wdata(pal_wdata), .we(pal_we), .q(pal_q));
-ss_ram_chunk #(.AW(11), .DW(8), .SS_IDX(SSIDX_ZRAM)) zram_chunk (
+ss_ram_chunk #(.AW(AW_ZRAM), .DW(8), .SS_IDX(SSIDX_ZRAM)) zram_chunk (
     .clk, .ssbus(ssb[6]), .active(zram_active), .addr(zram_addr), .wdata(zram_wdata), .we(zram_we), .q(zram_q));
 
 // Z80 registers (T80 REG / DIR layout)
@@ -374,7 +405,7 @@ typedef enum logic [4:0] {
     ST_R_HANDLER,   // 68000 runs the handler tail until the SSP write
     ST_R_SYNC,      // wait for the saved video position
     ST_S_MARK,      // 68000 held; slot size word cleared so an interrupted save reads as an empty slot
-    ST_R_CHECK,     // game runs; slot header and global word read, restore refused if the saved line is not in this mode
+    ST_R_CHECK,     // game runs; slot layout and saved position checked, restore refused unless the slot holds a usable state
     ST_S_Z80T,      // 68000 held; Z80 takes one more clock edge (it commits the last instruction's write), then held in T2
     ST_R_Z80T       // Z80 takes two clock edges from reset, to T2 of the restored opcode fetch
 } st_t;
@@ -384,10 +415,51 @@ st_t st = ST_IDLE;
 reg  [15:0] cnt;
 reg   [9:0] opl_idx;
 reg         got_state;
-reg         aux_ph = 0, aux_n = 0;
+reg         aux_ph = 0;
 ss_global_t chk_glob;
 
 assign chk_glob = ddr_aux.rdata;
+
+// restore check: the slot words read (size word, global header and data, the other nine headers, end marker) and their expected values
+localparam [3:0] CHK_N = 4'd13;
+reg   [3:0] chk_n;
+reg         chk_bad, chk_pos;
+wire [23:0] chk_ssp = chk_glob.ssp[23:0];
+wire        chk_ssp_ok = !chk_ssp[0] && chk_ssp >= WRAM_LO && chk_ssp <= WRAM_HI - SSP_POP;
+
+function automatic [15:0] chk_addr(input [3:0] n);
+    case (n)
+        4'd0:    chk_addr = 16'd0;
+        4'd1:    chk_addr = 16'(P_GLOBAL);
+        4'd2:    chk_addr = 16'(P_GLOBAL + 1);
+        4'd3:    chk_addr = 16'(P_WRAM);
+        4'd4:    chk_addr = 16'(P_SPR);
+        4'd5:    chk_addr = 16'(P_TXT);
+        4'd6:    chk_addr = 16'(P_FG);
+        4'd7:    chk_addr = 16'(P_PAL);
+        4'd8:    chk_addr = 16'(P_ZRAM);
+        4'd9:    chk_addr = 16'(P_ZREG);
+        4'd10:   chk_addr = 16'(P_REGS);
+        4'd11:   chk_addr = 16'(P_OPL);
+        default: chk_addr = 16'(P_END);
+    endcase
+endfunction
+
+function automatic [63:0] chk_word(input [3:0] n);
+    case (n)
+        4'd1:    chk_word = ss_hdr(SSIDX_GLOBAL, 2'd3, 32'd1);
+        4'd3:    chk_word = ss_hdr(SSIDX_WRAM, 2'd1, 32'(2**AW_WRAM));
+        4'd4:    chk_word = ss_hdr(SSIDX_SPR,  2'd1, 32'(2**AW_SPR));
+        4'd5:    chk_word = ss_hdr(SSIDX_TXT,  2'd1, 32'(2**AW_TXT));
+        4'd6:    chk_word = ss_hdr(SSIDX_FG,   2'd1, 32'(2**AW_FG));
+        4'd7:    chk_word = ss_hdr(SSIDX_PAL,  2'd1, 32'(2**AW_PAL));
+        4'd8:    chk_word = ss_hdr(SSIDX_ZRAM, 2'd0, 32'(2**AW_ZRAM));
+        4'd9:    chk_word = ss_hdr(SSIDX_ZREG, 2'd3, 32'd4);
+        4'd10:   chk_word = ss_hdr(SSIDX_REGS, 2'd3, 32'd2);
+        4'd11:   chk_word = ss_hdr(SSIDX_OPL,  2'd0, 32'd256);
+        default: chk_word = '1;
+    endcase
+endfunction
 reg         nmi_saved_low;
 reg         z80_prefix = 0;
 reg         z80_after_ei = 0;
@@ -448,6 +520,7 @@ always @(posedge clk) begin
     opl_r_write <= 0;
     saved       <= 0;
     pos_reject  <= 0;
+    bad_reject  <= 0;
     if (global_written) got_state <= 1;
 
     if (reset) begin
@@ -457,12 +530,13 @@ always @(posedge clk) begin
         aux_rd <= 0;
         aux_wr <= 0;
         aux_ph <= 0;
-        aux_n <= 0;
     end else case (st)
         ST_IDLE: begin
             cnt <= 0;
             aux_ph <= 0;
-            aux_n <= 0;
+            chk_n <= 0;
+            chk_bad <= 0;
+            chk_pos <= 0;
             if (save_req) begin
                 slot_used <= slot;
                 st <= ST_S_Z80;
@@ -533,12 +607,24 @@ always @(posedge clk) begin
             st <= ST_IDLE;
         end
 
-        // restore: slot header (size word) and the global chunk word (base + 16) read before anything is held
+        // restore: every check word read before anything is held; an empty slot ends the check at once
         ST_R_CHECK: begin
             if (!ddr_aux.busy) aux_rd <= 0;
-            if (!aux_ph) begin
+            if (chk_n == CHK_N) begin
+                if (chk_bad || chk_pos) begin
+                    aux_acq <= 0;
+                    bad_reject <= chk_bad;
+                    pos_reject <= !chk_bad;
+                    st <= ST_IDLE;
+                end else begin
+                    got_state <= 0;
+                    ss_read <= 1;
+                    cnt <= 0;
+                    st <= ST_R_READ;
+                end
+            end else if (!aux_ph) begin
                 if (!ddr_aux.busy) begin
-                    aux_addr <= slot_base + (aux_n ? 32'd16 : 32'd0);
+                    aux_addr <= slot_base + { 13'd0, chk_addr(chk_n), 3'b000 };
                     aux_be <= 8'hff;
                     aux_rd <= 1;
                     aux_ph <= 1;
@@ -546,22 +632,20 @@ always @(posedge clk) begin
             end else if (ddr_aux.rdata_ready) begin
                 aux_rd <= 0;
                 aux_ph <= 0;
-                aux_n <= 1;
-                if (!aux_n) begin
-                    // empty slot: nothing to restore
+                chk_n <= chk_n + 1'd1;
+                if (chk_n == 4'd0) begin
                     if (ddr_aux.rdata[63:32] == 32'd0) begin
                         aux_acq <= 0;
                         st <= ST_IDLE;
+                    end else if (ddr_aux.rdata[63:32] != SS_SIZE) begin
+                        chk_bad <= 1;
                     end
-                end else if (chk_glob.vc > vtotal) begin
-                    aux_acq <= 0;
-                    pos_reject <= 1;
-                    st <= ST_IDLE;
-                end else begin
-                    got_state <= 0;
-                    ss_read <= 1;
-                    cnt <= 0;
-                    st <= ST_R_READ;
+                end else if (chk_n == 4'd2) begin
+                    if (chk_glob.hc > HC_LAST || chk_glob.c6 > C6_LAST || chk_glob.c4 > C4_LAST || chk_glob.vc > VC_LAST || !chk_ssp_ok)
+                        chk_bad <= 1;
+                    if (chk_glob.vc > vtotal) chk_pos <= 1;
+                end else if (ddr_aux.rdata != chk_word(chk_n)) begin
+                    chk_bad <= 1;
                 end
             end
         end
@@ -661,6 +745,8 @@ assign z80_reset  = st == ST_R_LOAD || st == ST_R_OPL;
 assign z80_dirset = st == ST_R_Z80 && cnt < 16'd16;
 assign snd_reset  = st == ST_R_LOAD;
 assign opl_replay = st == ST_R_OPL;
+assign snd_mute   = st == ST_R_READ || st == ST_R_LOAD || st == ST_R_OPL || st == ST_R_Z80 || st == ST_R_Z80T ||
+                    st == ST_R_RESET || st == ST_R_HANDLER || st == ST_R_SYNC;
 assign c4_val     = pos_c4;
 
 endmodule

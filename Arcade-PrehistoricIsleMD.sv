@@ -82,7 +82,7 @@ localparam CONF_STR = {
     "P1O89,Aspect Ratio,Original,Full Screen,[ARC1],[ARC2];",
     "P1O3,Orientation,Horz,Vert;",
     "P1-;",
-    "P1O46,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%,CRT 100%;",
+    "P1O46,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
     "P1OA,Force Scandoubler,Off,On;",
     "P1-;",
     "P1OJ,Refresh Rate,Native,NTSC;",
@@ -138,7 +138,8 @@ localparam CONF_STR = {
     "Restore state 3,",
     "Save to state 4,",
     "Restore state 4,",
-    "Restore needs Native refresh;",
+    "Restore needs Native refresh,",
+    "Invalid state - not restored;",
     "V,v",`BUILD_DATE
 };
 
@@ -163,8 +164,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .status_in(status_in),
     .status_set(ss_status_set),
     .status_menumask({14'd0, hs_has_entries, direct_video}),
-    .info_req(ss_info_req | ss_pos_reject),
-    .info(ss_pos_reject ? 8'd14 : ss_info),
+    .info_req(ss_info_req | ss_pos_reject | ss_bad_reject),
+    .info(ss_bad_reject ? 8'd15 : ss_pos_reject ? 8'd14 : ss_info),
     .forced_scandoubler(hps_forced_scandoubler),
     .gamma_bus(gamma_bus),
     .new_vmode(new_vmode),
@@ -247,8 +248,6 @@ always @ (posedge clk_sys ) begin
     coin <=  ~ { 11'h000, key_tilt, key_test, key_service, coin_b, coin_a };
 end
 
-reg        p1_swap;
-
 reg        p1_right;
 reg        p1_left;
 reg        p1_down;
@@ -275,38 +274,22 @@ localparam BTN_SHOOT = 4, BTN_OPTION = 5, BTN_START = 6, BTN_COIN = 7, BTN_PAUSE
 wire [7:0] pad0 = joy0[BTN_SS] ? 8'd0 : joy0[7:0];
 wire [7:0] pad1 = joy1[BTN_SS] ? 8'd0 : joy1[7:0];
 
-// player 1 and player 2 pads (swapped by the OSD option)
+// player 1 and player 2 pads (swapped by the OSD option); keyboard keys stay with their player
 wire [7:0] pad_p1 = status[41] ? pad1 : pad0;
 wire [7:0] pad_p2 = status[41] ? pad0 : pad1;
 
 always @ * begin
-    p1_swap <= status[41];
+    p1_right   <= pad_p1[0] | key_p1_right;
+    p1_left    <= pad_p1[1] | key_p1_left;
+    p1_down    <= pad_p1[2] | key_p1_down;
+    p1_up      <= pad_p1[3] | key_p1_up;
+    p1_buttons <= { key_p1_c, pad_p1[BTN_OPTION] | key_p1_b, pad_p1[BTN_SHOOT] | key_p1_a };
 
-        if ( status[41] == 0 ) begin
-        p1_right   <= pad_p1[0] | key_p1_right;
-        p1_left    <= pad_p1[1] | key_p1_left;
-        p1_down    <= pad_p1[2] | key_p1_down;
-        p1_up      <= pad_p1[3] | key_p1_up;
-        p1_buttons <= { key_p1_c, pad_p1[BTN_OPTION] | key_p1_b, pad_p1[BTN_SHOOT] | key_p1_a };
-
-        p2_right   <= pad_p2[0] | key_p2_right;
-        p2_left    <= pad_p2[1] | key_p2_left;
-        p2_down    <= pad_p2[2] | key_p2_down;
-        p2_up      <= pad_p2[3] | key_p2_up;
-        p2_buttons <= { key_p2_c, pad_p2[BTN_OPTION] | key_p2_b, pad_p2[BTN_SHOOT] | key_p2_a };
-    end else begin
-        p2_right   <= pad_p2[0] | key_p1_right;
-        p2_left    <= pad_p2[1] | key_p1_left;
-        p2_down    <= pad_p2[2] | key_p1_down;
-        p2_up      <= pad_p2[3] | key_p1_up;
-        p2_buttons <= { key_p1_c, pad_p2[BTN_OPTION] | key_p1_b, pad_p2[BTN_SHOOT] | key_p1_a };
-
-        p1_right   <= pad_p1[0] | key_p2_right;
-        p1_left    <= pad_p1[1] | key_p2_left;
-        p1_down    <= pad_p1[2] | key_p2_down;
-        p1_up      <= pad_p1[3] | key_p2_up;
-        p1_buttons <= { key_p2_c, pad_p1[BTN_OPTION] | key_p2_b, pad_p1[BTN_SHOOT] | key_p2_a };
-    end
+    p2_right   <= pad_p2[0] | key_p2_right;
+    p2_left    <= pad_p2[1] | key_p2_left;
+    p2_down    <= pad_p2[2] | key_p2_down;
+    p2_up      <= pad_p2[3] | key_p2_up;
+    p2_buttons <= { key_p2_c, pad_p2[BTN_OPTION] | key_p2_b, pad_p2[BTN_SHOOT] | key_p2_a };
 end
 
 always @ * begin
@@ -569,10 +552,10 @@ arcade_video #(256,24) arcade_video
         .fx(scan_lines)
 );
 
-// DDR3: save states while they hold it, screen rotation otherwise
-ddr_if ddr_host(), ddr_ss(), ddr_rot();
+// DDR3: screen rotation writes take their cycle; a save state uses the others while it holds the bus
+ddr_if ddr_ss();
 
-wire        rot_ddram_clk, rot_ddram_we, rot_ddram_rd;
+wire        rot_ddram_clk, rot_ddram_we, rot_ddram_rd, rot_ddram_busy;
 wire  [7:0] rot_ddram_burstcnt, rot_ddram_be;
 wire [28:0] rot_ddram_addr;
 wire [63:0] rot_ddram_din;
@@ -581,35 +564,27 @@ screen_rotate screen_rotate (
     .CLK_VIDEO, .CE_PIXEL, .VGA_R, .VGA_G, .VGA_B, .VGA_HS, .VGA_VS, .VGA_DE,
     .rotate_ccw, .no_rotate, .flip, .video_rotated,
     .FB_EN, .FB_FORMAT, .FB_WIDTH, .FB_HEIGHT, .FB_BASE, .FB_STRIDE, .FB_VBL, .FB_LL,
-    .DDRAM_CLK(rot_ddram_clk), .DDRAM_BUSY(ddr_rot.busy), .DDRAM_BURSTCNT(rot_ddram_burstcnt), .DDRAM_ADDR(rot_ddram_addr),
+    .DDRAM_CLK(rot_ddram_clk), .DDRAM_BUSY(rot_ddram_busy), .DDRAM_BURSTCNT(rot_ddram_burstcnt), .DDRAM_ADDR(rot_ddram_addr),
     .DDRAM_DIN(rot_ddram_din), .DDRAM_BE(rot_ddram_be), .DDRAM_WE(rot_ddram_we), .DDRAM_RD(rot_ddram_rd)
 );
 
-assign ddr_rot.acquire    = ~ddr_ss.acquire;
-assign ddr_rot.addr       = { rot_ddram_addr, 3'b000 };
-assign ddr_rot.wdata      = rot_ddram_din;
-assign ddr_rot.byteenable = rot_ddram_be;
-assign ddr_rot.burstcnt   = rot_ddram_burstcnt;
-assign ddr_rot.write      = rot_ddram_we;
-assign ddr_rot.read       = rot_ddram_rd;
+wire ss_ddr = ddr_ss.acquire & ~rot_ddram_we;
 
-ddr_mux ddr_mux (
-    .clk(clk_sys),
-    .x(ddr_host),
-    .a(ddr_ss),
-    .b(ddr_rot)
-);
+assign rot_ddram_busy = DDRAM_BUSY;
 
 assign DDRAM_CLK      = clk_sys;
-assign DDRAM_ADDR     = ddr_host.addr[31:3];
-assign DDRAM_BE       = ddr_host.byteenable;
-assign DDRAM_WE       = ddr_host.write;
-assign DDRAM_RD       = ddr_host.read;
-assign DDRAM_DIN      = ddr_host.wdata;
-assign DDRAM_BURSTCNT = ddr_host.burstcnt;
-assign ddr_host.rdata       = DDRAM_DOUT;
-assign ddr_host.rdata_ready = DDRAM_DOUT_READY;
-assign ddr_host.busy        = DDRAM_BUSY;
+assign DDRAM_ADDR     = ss_ddr ? ddr_ss.addr[31:3]  : rot_ddram_addr;
+assign DDRAM_BE       = ss_ddr ? ddr_ss.byteenable  : rot_ddram_be;
+assign DDRAM_WE       = ss_ddr ? ddr_ss.write       : rot_ddram_we;
+assign DDRAM_RD       = ss_ddr ? ddr_ss.read        : rot_ddram_rd;
+assign DDRAM_DIN      = ss_ddr ? ddr_ss.wdata       : rot_ddram_din;
+assign DDRAM_BURSTCNT = ss_ddr ? ddr_ss.burstcnt    : rot_ddram_burstcnt;
+
+// a save-state request waits while a rotation write has the bus
+assign ddr_ss.rdata       = DDRAM_DOUT;
+assign ddr_ss.rdata_ready = DDRAM_DOUT_READY;
+// DDRAM_BUSY and a rotation write hold only a presented command, so read data is never refused
+assign ddr_ss.busy        = ~ddr_ss.acquire | ( ( DDRAM_BUSY | rot_ddram_we ) & ( ddr_ss.read | ddr_ss.write ) );
 
 reg [3:0] txt_pix;
 reg [3:0] bg_pix;
@@ -821,8 +796,13 @@ always @ (posedge clk_sys) begin
                 // setup to read x
                 sprite_ram_addr <= sprite_ram_addr + 1;
                 sprite_state <= 4;
+            end else if ( sprite_num < 255 ) begin
+                // not on this line: read the next sprite's y
+                sprite_num <= sprite_num + 1'd1;
+                sprite_ram_addr <= { sprite_num + 1'd1, 2'b0 };
+                sprite_state <= 2;
             end else begin
-                sprite_state <= 31;
+                sprite_state <= 0;
             end
         end else if ( sprite_state == 4 ) begin
             // x address valid 
@@ -845,6 +825,7 @@ always @ (posedge clk_sys) begin
             sprite_ram_addr <= sprite_ram_addr + 1;
             sprite_state <= 8;
         end else if ( sprite_state == 8 ) begin
+            spr_buf_w <= 0;
             sprite_rom_addr <= { spr_tile_num, spr_flip_x ^ spr_x_ofs[3], { 4 {spr_flip_y} } ^ spr_y_ofs[3:0] };
             sprite_rom_cs <= 1;
             sprite_state <= 9;
@@ -870,23 +851,22 @@ always @ (posedge clk_sys) begin
             endcase
             sprite_state <= 16;
         end else if ( sprite_state == 16 ) begin
+            // pixel written in the next state's clock; next pixel
             spr_buf_w <= ( spr_buf_din[3:0] < 15 );
             if ( spr_x_ofs < 15 ) begin
-                sprite_state <= 17;
+                spr_x_ofs <= spr_x_ofs + 1;
+                spr_x_pos <= spr_x_pos + 1;
+                sprite_state <= 8;
             end else begin
                 sprite_state <= 31;
             end
-        end else if ( sprite_state == 17 ) begin
-            spr_buf_w <= 0;
-            spr_x_ofs <= spr_x_ofs + 1;
-            spr_x_pos <= spr_x_pos + 1;
-            sprite_state <= 8;
         end else if ( sprite_state == 31 ) begin
             spr_buf_w <= 0;
             if ( sprite_num < 255 ) begin
-                // next sprite
+                // next sprite: read its y
                 sprite_num <= sprite_num + 1;
-                sprite_state <= 1;
+                sprite_ram_addr <= { sprite_num + 1'd1, 2'b0 };
+                sprite_state <= 2;
             end else begin
                 // done.
                 sprite_state <= 0;
@@ -956,7 +936,8 @@ always @ (posedge clk_sys) begin
                 tile_pal_addr <= pen;
             end else if ( clk6_count == 7 ) begin
                 if ( hc < 257 && pen_valid == 1 ) begin
-                    rgb <= { tile_pal_dout[15:12],4'h0,tile_pal_dout[11:8],4'h0,tile_pal_dout[7:4],4'h0 };
+                    // 4-bit channels expanded to 8 bits (0-255)
+                    rgb <= { {2{tile_pal_dout[15:12]}}, {2{tile_pal_dout[11:8]}}, {2{tile_pal_dout[7:4]}} };
                 end
             end
         end
@@ -1172,8 +1153,7 @@ reg [1:0] vbl_sr;
 wire m68k_ipl2_n_next = reset ? 1'b1 : ss_regs_load ? ss_regs_out.ipl2_n : ss_busy ? m68k_ipl2_n :
                         ( vbl_sr == 2'b01 ) ? 1'b0 : ( int_ack == 1 || vbl_sr == 2'b10 ) ? 1'b1 : m68k_ipl2_n;
 
-// vblank handling
-// process interrupt and sprite buffering
+// vblank interrupt
 always @ (posedge clk_sys ) begin
     if ( reset == 1 ) begin
         m68k_ipl2_n <= 1;
@@ -1189,7 +1169,6 @@ always @ (posedge clk_sys ) begin
         end else if ( ss_busy ) begin
             // interrupt line held while a save state runs
         end else if ( vbl_sr == 2'b01 ) begin // rising edge
-            // trigger sprite buffer copy
             //  68k vbl interrupt
             m68k_ipl2_n <= 0;
         end else if ( int_ack == 1 || vbl_sr == 2'b10 ) begin
@@ -1476,7 +1455,8 @@ audio_mix u_mix_mono (
 );
 
 always @ (posedge clk_sys ) begin
-    if ( pause_cpu == 1 ) begin
+    // muted while paused or while a save-state restore runs
+    if ( pause_cpu == 1 || ss_snd_mute == 1 ) begin
         AUDIO_L <= 0;
         AUDIO_R <= 0;
     end else if ( pause_cpu == 0 ) begin
@@ -1548,8 +1528,7 @@ dpram_cen #(.LEN(8192)) ram8kx8_L (
 reg  [10:0] sprite_ram_addr;
 wire [15:0] sprite_ram_dout /* synthesis keep */;
 
-// main 68k sprite ram high
-// 2kx16
+// sprite RAM high byte: 68000 on port a, read live by the sprite renderer on port b
 dpram_cen #(.LEN(1024)) sprite_ram_H (
     .clock_a ( clk_sys ),
     .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
@@ -1566,7 +1545,7 @@ dpram_cen #(.LEN(1024)) sprite_ram_H (
     .q_b( sprite_ram_dout[15:8] )
     );
 
-// main 68k sprite ram low
+// sprite RAM low byte: 68000 on port a, read live by the sprite renderer on port b
 dpram_cen #(.LEN(1024)) sprite_ram_L (
     .clock_a ( clk_sys ),
     .cen_a ( ss_spr_active ? 1'b1 : cen_18M ),
@@ -1770,25 +1749,6 @@ wire [7:0] upd_dout;
 wire [15:0] spr_pal_dout;
 wire [15:0] m68k_spr_pal_dout;
 
-reg  [8:0]  sprite_buffer_addr;  // 128 sprites
-reg  [63:0] sprite_buffer_din;
-wire [63:0] sprite_buffer_dout;
-reg  sprite_buffer_w;
-
-dual_port_ram #(.LEN(512), .DATA_WIDTH(64)) sprite_buffer (
-    .clock_a ( clk_sys ),
-    .address_a ( sprite_buffer_addr ),
-    .wren_a ( 1'b0 ),
-    .data_a ( ),
-    .q_a ( sprite_buffer_dout ),
-
-    .clock_b ( clk_sys ),
-    .address_b ( sprite_buffer_addr ),
-    .wren_b ( sprite_buffer_w ),
-    .data_b ( sprite_buffer_din ),
-    .q_b( )
-    );
-
 reg          line_buf_tx_w;
 reg          line_buf_fg_w;
 reg          line_buf_bg_w;
@@ -1975,7 +1935,7 @@ wire  [7:0] ss_opl_r_din;
 wire        ss_c4_load;
 wire  [5:0] ss_c4_val;
 wire        ss_regs_load;
-wire        ss_saved, ss_pos_reject;
+wire        ss_saved, ss_pos_reject, ss_bad_reject, ss_snd_mute;
 wire  [1:0] ss_slot_used;
 
 wire        ss_wram_active, ss_wram_we;
@@ -2028,6 +1988,8 @@ pi_ss pi_ss (
     .saved(ss_saved),
     .slot_used(ss_slot_used),
     .pos_reject(ss_pos_reject),
+    .bad_reject(ss_bad_reject),
+    .snd_mute(ss_snd_mute),
 
     .ddr(ddr_ss),
 

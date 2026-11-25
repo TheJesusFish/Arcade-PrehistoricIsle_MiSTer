@@ -9,7 +9,7 @@ The intent is for this core to be a 1:1 playable implementation of Prehistoric I
 
 ## PrehistoricIsleMD
 
-This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRAs `... [MD].mra` with `<rbf>PrehistoricIsleMD</rbf>`). The emulation is unchanged: CPU, interrupt, video and sound timing and output are those of the previous release. The changes:
+This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRAs `... [MD].mra` with `<rbf>PrehistoricIsleMD</rbf>`). The emulation is unchanged: CPU, interrupt, video and sound timing and output are those of the previous release, apart from the fixes listed below. The changes:
 
 - Framework updated to the current [**Template_MiSTer**](https://github.com/MiSTer-devel/Template_MiSTer) (`sys/`, Template project layout, HDMI PLL output on counter C5 per Template_MiSTer issue #112).
 - CPU and sound modules re-imported from their original repositories at the commits the previous release used (table below).
@@ -17,14 +17,21 @@ This is the MD version of the core (`Arcade-PrehistoricIsleMD_YYYYMMDD.rbf`, MRA
 - Every clock is `clk_sys` with clock enables, so the whole core is timing-constrained.
 - **Save states**: hold **L**, then **Down** saves, **Up** restores, **Left / Right** selects the slot (also Alt+F1 / F1 and the OSD, all on the selected slot). With "Autoincrement Slot" on, the selection moves to the next slot once a save has finished.
 - **High scores** are restored from and saved to `config/nvram/<MRA name>.nvm` (entries from MAME `hiscore.dat`); saved when the OSD is opened (OSD option "Autosave Hiscores") or with "Save Hiscores".
-- **Controls**: each controller drives its own player's Start and Coin; player 2 is controller 2. "Swap P1/P2 Joystick" swaps the whole controllers.
+- **Controls**: each controller drives its own player's Start and Coin; player 2 is controller 2. "Swap P1/P2 Joystick" swaps the whole controllers; keyboard keys stay with their player.
 - **DIP switches** follow MAME (`-listxml`), except where the game's own DIP sheet differs (see below). Changing a DIP in the OSD no longer resets the game; it takes effect with "Reset to apply". DIP and high-score downloads no longer reach the ROM loader; only the ROM download does.
 - Fixed: the OSD H/V-sync position and width adjustments (negative values acted as large positive ones, and some settings removed the V-sync pulse).
 - Fixed: holding the game in reset (F3, OSD Reset, core load) no longer stops the video sync; the game still starts at the beginning of a frame.
 - Fixed: changing Refresh Rate now takes effect while the picture is being drawn, so the frame where it changes has a single V-sync pulse. Before, a change near the end of a frame could give that frame two pulses, a pulse hundreds of lines long, or about 500 lines. Checked on HDMI: through repeated NTSC / Native switches without a reload, the picture keeps the size of a fresh Native launch.
 - Fixed: a game reset now also clears the YM3812's channel feedback (registers C0-C8), as the chip's reset does; jtopl kept it over a reset (one-line change in jtopl_reg_ch.v).
 - Fixed: a sprite crossing the left or right screen edge is clipped instead of disappearing for a frame (a sprite at X 255 or -1 was not drawn), and sprite 0 is no longer drawn a second time in front of the other sprites.
-- The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework).
+- Fixed: "Swap P1/P2 Joystick" moved the keyboard's directions and buttons to the other player but not its Start and Coin; it now swaps the controllers only, as documented.
+- Fixed: full-intensity palette colours are output as 255 instead of 240 (each 4-bit channel n is expanded to n × 17, as the framework's own conversion does).
+- Fixed: a save-state slot that does not hold a complete state of this core (for example a truncated or damaged file) is refused before anything is changed (OSD message "Invalid state - not restored"). The slot size, every section header, the end marker, the saved video position and the 68000 stack pointer are checked. Before, a damaged slot could overwrite the running game with zeros, or hold both CPUs waiting for a video position that never comes.
+- Fixed: high scores are saved from the last complete copy of the score table. A save state running at the same moment no longer changes the saved bytes, and a reset during the copy no longer mixes two tables. "Save Settings" before the game has set up its table (first start, no `.nvm` yet) saves an empty (all-zero) file, which the next start ignores; it used to be restored over the game's own table.
+- Fixed: with Orientation Vert, a save or restore no longer leaves pieces of an older frame on HDMI (the rotation writes now take priority over the save-state transfer in DDR3).
+- Fixed: lines with many sprites. The sprite pass for a line ran out of time above about 33 sprites on one line; the game puts up to 40 on a line (explosions, later stages), and then part of them appeared a line late or a line showed stale sprites. The pass now takes fewer clocks per sprite, draws exactly the same pixels, and finishes the game's busiest lines with time to spare.
+- A restore mutes the audio while it rebuilds the sound chips, so the partly restored FM registers are not heard.
+- The OSD "Video Mode NTSC/PAL" item was removed (Y/C is set by the framework), and so was the Scandoubler Fx "CRT 100%" setting: the framework's scanlines go up to 75%, and 100% showed no scanlines at all.
 
 Button layout (changed from the previous release, so controller maps saved for these setnames need to be redone):
 
@@ -46,9 +53,13 @@ DIP switches: MAME 0.288 for all sets, with these differences taken from the gam
 
 Note: the US set keeps a separate credit count for each side: Coin 1 (controller 1's Select, key 5) credits player 1 and Coin 2 (controller 2's Select, key 6) credits player 2.
 
-Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes and the music tempo phase may shift by up to one timer tick. A sampled sound effect (µPD7759) that was playing when the state was saved is not resumed: the rest of that effect is lost, and later effects play normally. The sound CPU's HALT state is not saved; the sound program (the same ROM in all five sets) never executes HALT.
+Save states restore the game exactly. The YM3812's internal timer and envelope counters are not saved (they are inside the jtopl module): its registers are restored, so the music continues, but notes that are sounding restart their envelopes, a note that is fading out is not heard again, and the music tempo phase may shift by up to one timer tick. A sampled sound effect (µPD7759) that was playing when the state was saved is not resumed: the rest of that effect is lost, and later effects play normally. The sound CPU's HALT state is not saved; the sound program (the same ROM in all five sets) never executes HALT.
 
 A save made in the Native refresh mode near the end of a frame records a line that the shorter NTSC frame does not have. Such a save is not restored while Refresh Rate is NTSC (OSD message "Restore needs Native refresh"); switch to Native to restore it. A save interrupted by a reset leaves its slot empty rather than holding a partial state.
+
+Checked against the game itself (MAME 0.288 traces of all five sets, attract and play): the Player 1 control-inversion register ($0F0046) is only ever written with 0, and the four scroll registers only as full 16-bit words, so the core's handling of both registers gives the same result as MAME's for everything the program writes.
+
+High-score file: MiSTer Main pads an `.nvm` file shorter than the table (84 bytes) with zeros and sends it as a complete table, so a truncated file is restored with zeros in its missing part; the core cannot tell the padding from real data. Delete such a file to start again from the game's own table.
 
 ## External Modules
 
@@ -58,7 +69,7 @@ A save made in the Native refresh mode near the end of a frame records a line th
 | [**T80**](https://github.com/MiSTer-devel/NeoGeo_MiSTer/tree/master/rtl/cpu/T80) | [**Zilog Z80 CPU**](https://en.wikipedia.org/wiki/Zilog_Z80) | MiSTer-devel/NeoGeo_MiSTer rtl/cpu/T80 @ 90a8350 | Daniel Wallner, MiSTer changes by Sorgelig |
 | [**jtopl2**](https://github.com/jotego/jtopl) | [**Yamaha OPL 2**](https://en.wikipedia.org/wiki/Yamaha_OPL#OPL2) | jotego/jtopl @ d3e73f1 (jtopl_reg_ch.v: channel feedback cleared on reset for the MD version) | Jose Tejada |
 | [**jt7759**](https://github.com/jotego/jt7759) | [**NEC µPD7759**](https://github.com/jotego/jt7759) | jotego/jt7759 @ 94b472c | Jose Tejada |
-| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Arcade-Rygar_MiSTer src/mem | Josh Bassett, modified by Erin Olafson (read capture and start-up refresh counter modified for the MD version) |
+| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Arcade-Rygar_MiSTer src/mem | Josh Bassett, modified by Erin Olafson (for the MD version: SDRAM read capture, start-up refresh counter and write data release; download buffer counter wrap and reset between ROM downloads) |
 | [**pause**](https://github.com/JimmyStones/Pause_MiSTer) | Pause handling | Pause_MiSTer v0002 | Jim Gregory |
 | [**save states**](https://github.com/MiSTer-devel/Arcade-TaitoF2_MiSTer) | Save-state stream, DDR3 interface, save-state UI (`rtl/savestate/`) | Arcade-TaitoF2_MiSTer @ 9438df9 | Martin Donlon |
 | [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer) | MiSTer Framework Template | Template_MiSTer @ d6324f2 | sorgelig and contributors |
@@ -137,9 +148,9 @@ FPGA implementation loosely based on [**mame source**](https://github.com/mamede
 
 ### Scandoubler Options
 
-- Additional toggle to enable the scandoubler without changing ini settings and new scanline option for 100% is available, this draws a black line every other frame. Below is an example.
+- Additional toggle to enable the scandoubler without changing ini settings. Below is an example of the scanline settings.
 
-<table><tr><th>Scandoubler Fx</th><th>Scanlines 25%</th><th>Scanlines 50%</th><th>Scanlines 75%</th><th>Scanlines 100%</th><tr><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252689-acfb3610-89d9-4ec2-9f69-dc285d9cf6dd.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252701-2cd221dd-0e31-49c3-89ef-e0dcafdd4916.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252717-b4f7bd03-5e76-4e43-b055-1a418589a169.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252728-638d1a44-07ff-4060-918f-ebfb79a6f206.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252737-be45e006-c172-471a-80dd-ee1335cd8ede.png"></td></tr></table>
+<table><tr><th>Scandoubler Fx</th><th>Scanlines 25%</th><th>Scanlines 50%</th><th>Scanlines 75%</th><tr><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252689-acfb3610-89d9-4ec2-9f69-dc285d9cf6dd.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252701-2cd221dd-0e31-49c3-89ef-e0dcafdd4916.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252717-b4f7bd03-5e76-4e43-b055-1a418589a169.png"></td><td><br> <p align="center"><img width="128" height="112" src="https://user-images.githubusercontent.com/32810066/191252728-638d1a44-07ff-4060-918f-ebfb79a6f206.png"></td></tr></table>
 
 # PCB Information / Control Layout
 

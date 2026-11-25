@@ -1,4 +1,6 @@
 
+// ROM loader and SDRAM request mux of the original release (Erin Olafson); modified for Arcade-PrehistoricIsleMD (2026-11-24):
+// the download buffer is held in reset while no ROM download runs, so every transfer starts on a word boundary.
 `default_nettype none
 
 module rom_controller 
@@ -133,6 +135,7 @@ reg ctrl_req;
 // the SDRAM. 
 download_buffer #(.SIZE(4) ) download_buffer
 (
+    .reset(~ioctl_download),
     .clk(clk),
     .din(ioctl_data),
     .dout(download_data),

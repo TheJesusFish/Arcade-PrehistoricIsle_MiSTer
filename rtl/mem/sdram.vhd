@@ -34,7 +34,7 @@
 -- SOFTWARE.
 
 -- Modified for Arcade-PrehistoricIsleMD (2026-11-23): both read words are captured in the DQ input registers;
--- the refresh counter is held at 0 during INIT.
+-- the refresh counter is held at 0 during INIT. (2026-11-24): write data is driven only for the burst's two words.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -442,7 +442,7 @@ begin
       (others => '0') when others;
 
   -- decode the next 16-bit word from the write buffer
-  sdram_dq <= data_reg((BURST_LENGTH-wait_counter)*SDRAM_DATA_WIDTH-1 downto (BURST_LENGTH-wait_counter-1)*SDRAM_DATA_WIDTH) when state = WRITE else (others => 'Z');
+  sdram_dq <= data_reg((BURST_LENGTH-wait_counter)*SDRAM_DATA_WIDTH-1 downto (BURST_LENGTH-wait_counter-1)*SDRAM_DATA_WIDTH) when state = WRITE and wait_counter < BURST_LENGTH else (others => 'Z');
 
   -- set SDRAM data mask
   sdram_dqmh <= '0';
